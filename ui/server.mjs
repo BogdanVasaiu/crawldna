@@ -92,6 +92,9 @@ async function handleStart(req, res) {
 
   const run = crawlDocs(targets, {
     ...options,
+    // The Web UI is an app: always persist so History and Reshape work. The cache
+    // is rooted at the server's cwd by default (library callers save only on opt-in).
+    save: true,
     onEvent: (ev) => {
       eventBuffer.push(ev);
       if (eventBuffer.length > 5000) eventBuffer.shift();
@@ -313,8 +316,8 @@ export async function startServer({ port = 4000 } = {}) {
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {
       process.stderr.write(
-        `\n✗ Port ${port} is already in use — an old docdna server is still running.\n` +
-          `  Close that terminal/process, or start with a different port: docdna serve --port ${port + 1}\n`,
+        `\n✗ Port ${port} is already in use — an old sagecrawl server is still running.\n` +
+          `  Close that terminal/process, or start with a different port: sagecrawl serve --port ${port + 1}\n`,
       );
     } else {
       process.stderr.write('✗ Server error: ' + (err && err.message) + '\n');
@@ -323,7 +326,7 @@ export async function startServer({ port = 4000 } = {}) {
   });
 
   await new Promise((resolve) => server.listen(port, resolve));
-  process.stdout.write(`docdna UI on http://localhost:${port}\n`);
+  process.stdout.write(`sagecrawl UI on http://localhost:${port}\n`);
 
   // Make the browser ready up front so the user never hits a mid-crawl error.
   const ready = await ensureBrowser({ log: (m) => process.stdout.write(m + '\n') });

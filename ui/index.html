@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>docdna</title>
+<title>sagecrawl</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap');
 
@@ -102,6 +102,24 @@
   .chk label { margin:0; color:var(--t1); cursor:pointer; }
   .muted { color:var(--t3); font-size:12px; }
   .hint { color:var(--t3); font-size:11.5px; margin:4px 0 14px; line-height:1.5; }
+
+  /* ---- collapsible "what do these options do?" guide ---- */
+  details.opts-guide { margin:14px 0 0; background:var(--s3); border:1px solid var(--b1); border-radius:var(--r-sm); }
+  details.opts-guide > summary { list-style:none; cursor:pointer; padding:10px 13px; font-size:12px; font-weight:500;
+    color:var(--t2); display:flex; align-items:center; gap:8px; user-select:none; }
+  details.opts-guide > summary::-webkit-details-marker { display:none; }
+  details.opts-guide > summary::before { content:'?'; display:inline-flex; align-items:center; justify-content:center;
+    width:16px; height:16px; border-radius:50%; background:var(--a-dim); color:var(--a); font-size:11px; font-weight:700; flex-shrink:0; }
+  details.opts-guide > summary:hover { color:var(--t1); }
+  details.opts-guide[open] > summary { color:var(--t1); border-bottom:1px solid var(--b1); }
+  details.opts-guide .og-body { padding:12px 14px; }
+  details.opts-guide dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:7px 14px; align-items:baseline; }
+  details.opts-guide dt { color:var(--t1); font-size:12px; font-weight:600; white-space:nowrap; }
+  details.opts-guide dd { margin:0; color:var(--t2); font-size:12px; line-height:1.55; }
+  details.opts-guide .og-foot { margin:12px 0 0; padding-top:11px; border-top:1px solid var(--b1);
+    color:var(--t3); font-size:11.5px; line-height:1.7; }
+  details.opts-guide code { font-family:var(--mono); font-size:11px; background:var(--s5);
+    padding:1px 5px; border-radius:var(--r-xs); color:var(--t1); }
 
   /* ---- ollama status + install hint ---- */
   .ollama { margin-bottom:14px; }
@@ -377,7 +395,7 @@
 <header>
   <div class="brand">
     <span class="brand-mark"></span>
-    <h1>docdna</h1>
+    <h1>sagecrawl</h1>
     <span class="brand-tag">websites → clean markdown</span>
   </div>
   <button id="back" class="ghost hidden">← back to runs</button>
@@ -389,7 +407,7 @@
   <div class="card">
     <h2>New crawl</h2>
     <p class="hint">Give it one or more links and a plain-English task describing <b>what to extract</b>.
-      docdna opens each page in a real browser, reveals hidden content (tabs, accordions, “load more”),
+      sagecrawl opens each page in a real browser, reveals hidden content (tabs, accordions, “load more”),
       and keeps only what your task asks for — <b>verbatim</b>. Turning it into tables, splits or filtered
       subsets comes later, in <b>Reshape</b>.</p>
     <div class="chk">
@@ -488,6 +506,33 @@
         <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
         <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
       </div>
+
+      <details class="opts-guide">
+        <summary>What do these options do?</summary>
+        <div class="og-body">
+          <dl>
+            <dt>Browser</dt>
+            <dd>How the page is opened. <code>auto</code> uses a real browser — needed to click
+              things like tabs or “next month”. <code>never</code> is a quick text-only grab that
+              skips clicking. Keep <code>auto</code>.</dd>
+            <dt>Concurrency</dt>
+            <dd>How many pages load at once. Higher is faster on big sites; no effect on a single page.</dd>
+            <dt>Max pages</dt>
+            <dd>Stop after this many pages. <code>0</code> = no limit.</dd>
+            <dt>Include</dt>
+            <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
+            <dt>Exclude</dt>
+            <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
+          </dl>
+          <p class="og-foot">
+            <b>Regex examples:</b> Include <code>/docs/</code> stays in that section ·
+            Exclude <code>/blog/</code> or <code>\.pdf$</code> skips those ·
+            <code>a|b</code> = a or b · <code>\.</code> = a literal dot.
+            Matching is “contains” by default — leave both empty to follow everything in scope.
+            <br>For a single page (e.g. a calendar), just keep <b>Browser = auto</b> and ignore the rest.
+          </p>
+        </div>
+      </details>
       <p class="muted" style="margin:14px 0 0">
         Every run is saved automatically. The crawl gives you one faithful, <b>verbatim</b>
         <code>.md</code> per link — exactly the content your task asked for, nothing reshaped.
@@ -779,7 +824,7 @@ function setModelLabel(name, isCloud) {
 
 function selectModel(name, isCloud) {
   selectedModel = name;
-  try { localStorage.setItem('docdna.model', name); } catch {}
+  try { localStorage.setItem('sagecrawl.model', name); } catch {}
   setModelLabel(name, isCloud);
   $('model-panel').querySelectorAll('.dd-item').forEach((el) => el.classList.toggle('selected', el.dataset.name === name));
   closeModelDropdown();
@@ -820,7 +865,7 @@ function populateModels() {
 // whose /models endpoint needs no auth (OpenRouter) AND those where it is gated.
 function onApiModelInput() {
   selectedModel = $('apiModel').value.trim();
-  try { localStorage.setItem('docdna.model.openai', selectedModel); } catch {}
+  try { localStorage.setItem('sagecrawl.model.openai', selectedModel); } catch {}
 }
 
 function populateApiModels() {
@@ -828,7 +873,7 @@ function populateApiModels() {
     .map((m) => '<option value="' + escAttr(m.name) + '"></option>').join('');
   const inp = $('apiModel');
   if (!inp.value) {
-    let saved = ''; try { saved = localStorage.getItem('docdna.model.openai') || ''; } catch {}
+    let saved = ''; try { saved = localStorage.getItem('sagecrawl.model.openai') || ''; } catch {}
     inp.value = saved || (availableModels[0] ? availableModels[0].name : '');
   }
   selectedModel = inp.value.trim();
@@ -848,7 +893,7 @@ function setApiStatus(state, html) {
 // provider's saved model, then re-probe.
 function setProvider(p) {
   provider = p === 'openai' ? 'openai' : 'ollama';
-  try { localStorage.setItem('docdna.provider', provider); } catch {}
+  try { localStorage.setItem('sagecrawl.provider', provider); } catch {}
   $('provider-seg').querySelectorAll('.seg-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.provider === provider));
   $('ollama-block').classList.toggle('hidden', provider !== 'ollama');
@@ -858,8 +903,8 @@ function setProvider(p) {
   $('ollamaHostCell').classList.toggle('hidden', provider !== 'ollama');
   try {
     selectedModel = provider === 'openai'
-      ? (localStorage.getItem('docdna.model.openai') || $('apiModel').value.trim())
-      : (localStorage.getItem('docdna.model') || selectedModel);
+      ? (localStorage.getItem('sagecrawl.model.openai') || $('apiModel').value.trim())
+      : (localStorage.getItem('sagecrawl.model') || selectedModel);
   } catch {}
   refreshModels();
 }
@@ -886,7 +931,7 @@ async function refreshModels() {
   if (provider === 'openai') {
     const baseUrl = $('apiBaseUrl').value.trim();
     const apiKey = $('apiKey').value.trim();
-    try { localStorage.setItem('docdna.baseUrl', baseUrl); localStorage.setItem('docdna.apiKey', apiKey); } catch {}
+    try { localStorage.setItem('sagecrawl.baseUrl', baseUrl); localStorage.setItem('sagecrawl.apiKey', apiKey); } catch {}
     if (!baseUrl) {
       connOk = false; availableModels = [];
       setApiStatus('checking', 'enter a base URL & key, then Fetch models');
@@ -898,7 +943,7 @@ async function refreshModels() {
     if (apiKey) qs.set('apiKey', apiKey);
   } else {
     const host = $('ollamaHost').value.trim() || OLLAMA_DEFAULT;
-    try { localStorage.setItem('docdna.host', host); } catch {}
+    try { localStorage.setItem('sagecrawl.host', host); } catch {}
     setOllamaStatus('checking', 'checking Ollama…');
     qs.set('host', host);
   }
@@ -1459,19 +1504,19 @@ $('stop').onclick = async () => {
 
 // boot
 try {
-  const savedHost = localStorage.getItem('docdna.host');
+  const savedHost = localStorage.getItem('sagecrawl.host');
   if (savedHost) $('ollamaHost').value = savedHost;
-  const savedBase = localStorage.getItem('docdna.baseUrl');
+  const savedBase = localStorage.getItem('sagecrawl.baseUrl');
   if (savedBase) $('apiBaseUrl').value = savedBase;
-  const savedKey = localStorage.getItem('docdna.apiKey');
+  const savedKey = localStorage.getItem('sagecrawl.apiKey');
   if (savedKey) $('apiKey').value = savedKey;
-  const savedApiModel = localStorage.getItem('docdna.model.openai');
+  const savedApiModel = localStorage.getItem('sagecrawl.model.openai');
   if (savedApiModel) $('apiModel').value = savedApiModel;
-  selectedModel = localStorage.getItem('docdna.model') || '';
+  selectedModel = localStorage.getItem('sagecrawl.model') || '';
 } catch {}
 renderHistory();
 let savedProvider = 'ollama';
-try { savedProvider = localStorage.getItem('docdna.provider') || 'ollama'; } catch {}
+try { savedProvider = localStorage.getItem('sagecrawl.provider') || 'ollama'; } catch {}
 setProvider(savedProvider); // sets up the active provider's blocks + probes models
 </script>
 </body>

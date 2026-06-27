@@ -1,20 +1,25 @@
 {
-  "name": "docdna",
+  "name": "sagecrawl",
   "version": "0.1.0",
   "description": "General, task-driven web crawler that reveals interaction-hidden content and outputs clean Markdown.",
   "type": "module",
   "license": "MIT",
   "main": "./src/index.mjs",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.mjs"
+    }
   },
   "bin": {
-    "docdna": "./bin/cli.mjs"
+    "sagecrawl": "./bin/cli.mjs"
   },
   "files": [
     "src",
     "bin",
     "ui",
+    "index.d.ts",
     "README.md",
     "LICENSE"
   ],

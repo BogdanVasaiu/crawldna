@@ -75,7 +75,7 @@ const SNIFFER = `(() => {
     proto.addEventListener = function (type, listener, opts) {
       try {
         if (INTERESTING[type] && this && this.nodeType === 1) {
-          this.setAttribute('data-docdna-listener', '1');
+          this.setAttribute('data-sagecrawl-listener', '1');
         }
       } catch (e) {}
       return orig.call(this, type, listener, opts);
@@ -87,7 +87,7 @@ const SNIFFER = `(() => {
 export async function newPage() {
   const browser = await getBrowser();
   const context = await browser.newContext({
-    userAgent: 'docdna/0.1 (+https://github.com/docdna)',
+    userAgent: 'sagecrawl/0.1 (+https://github.com/sagecrawl)',
     viewport: { width: 1280, height: 900 },
   });
   await context.addInitScript(SNIFFER);

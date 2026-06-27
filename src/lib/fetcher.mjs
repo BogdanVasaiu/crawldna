@@ -4,7 +4,7 @@
 import { isBrowserAvailable, newPage } from './browser.mjs';
 
 const DEFAULT_HEADERS = {
-  'user-agent': 'docdna/0.1 (+https://github.com/docdna)',
+  'user-agent': 'sagecrawl/0.1 (+https://github.com/sagecrawl)',
   accept:
     'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
   'accept-language': 'en-US,en;q=0.9',

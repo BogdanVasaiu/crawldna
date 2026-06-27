@@ -100,7 +100,7 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         '[role=button]', '[role=tab]', '[role=menuitemradio]', '[role=switch]',
         '[role=option]', '[role=checkbox]', '[role=combobox]',
         '[aria-expanded]', '[aria-controls]', '[aria-selected]', '[aria-pressed]',
-        '[onclick]', '[data-docdna-listener]',
+        '[onclick]', '[data-sagecrawl-listener]',
         'a[href^="#"]', 'a:not([href])',
         '[class*=tab]', '[class*=accordion]', '[class*=toggle]', '[class*=expand]',
         '[class*=collaps]', '[class*=disclosure]', '[class*=segment]',
@@ -118,7 +118,7 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         if (!isVisible(el)) continue;
         const label = labelOf(el);
         if (label && label.length < 40 && CONSENT_RE.test(label)) {
-          el.setAttribute('data-docdna-id', String(rid));
+          el.setAttribute('data-sagecrawl-id', String(rid));
           consent.push({ id: rid, label });
           rid++;
         }
@@ -150,7 +150,7 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         const ariaControls = el.getAttribute('aria-controls') || '';
         const ariaSelected = el.getAttribute('aria-selected');
         const ariaPressed = el.getAttribute('aria-pressed');
-        const hasListener = el.hasAttribute('data-docdna-listener') || el.hasAttribute('onclick');
+        const hasListener = el.hasAttribute('data-sagecrawl-listener') || el.hasAttribute('onclick');
         const pointer = style.cursor === 'pointer';
         const interactiveClass = INTERACTIVE_CLASS.test(cls);
 
@@ -184,7 +184,7 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         const heuristic = kind !== 'control' || DISCLOSURE_LABEL.test(label);
 
         const signature = `${role}|${label}|${ariaControls}|${kind}`;
-        el.setAttribute('data-docdna-id', String(rid));
+        el.setAttribute('data-sagecrawl-id', String(rid));
         revealers.push({ id: rid, kind, label, role, cls: cls.slice(0, 60), context: nearestHeading(el), heuristic, signature });
         rid++;
       }

@@ -149,11 +149,11 @@ export function extractMarkdown(html, { contentSelector, baseUrl, title } = {}) 
   });
 
   // The reveal marks non-visible elements (hidden modals, off-state placeholders,
-  // on-screen keyboards) with data-docdna-hidden so the serialized HTML doesn't
+  // on-screen keyboards) with data-sagecrawl-hidden so the serialized HTML doesn't
   // leak them into the output. Drop them before anything else inspects the DOM, so
   // even the main-content picker never lands on a hidden panel. No-op for the
   // static path (no markers present).
-  for (const n of root.querySelectorAll('[data-docdna-hidden]')) n.remove();
+  for (const n of root.querySelectorAll('[data-sagecrawl-hidden]')) n.remove();
 
   const docTitle =
     title ||

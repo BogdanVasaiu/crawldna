@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// docdna CLI — a thin face over the core (§7). All logic lives in src/index.mjs.
+// sagecrawl CLI — a thin face over the core (§7). All logic lives in src/index.mjs.
 
 import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
@@ -20,21 +20,21 @@ const C = {
 const useColor = process.stdout.isTTY;
 const c = (color, s) => (useColor ? color + s + C.reset : s);
 
-const HELP = `${C.bold}docdna${C.reset} — general, task-driven web crawler → clean Markdown
+const HELP = `${C.bold}sagecrawl${C.reset} — general, task-driven web crawler → clean Markdown
 
 Usage:
-  docdna <url> [--task "..."]                       crawl one site
-  docdna crawl <url> [options]                      crawl one or more sites
-  docdna reshape <runId> --ask "..."                reshape a saved extraction (Phase 2)
-  docdna serve [--port 4000]                        start the Web UI
-  docdna runs [list|rm <id…>|clear|path]            manage cached runs
-  docdna --help
+  sagecrawl <url> [--task "..."]                       crawl one site
+  sagecrawl crawl <url> [options]                      crawl one or more sites
+  sagecrawl reshape <runId> --ask "..."                reshape a saved extraction (Phase 2)
+  sagecrawl serve [--port 4000]                        start the Web UI
+  sagecrawl runs [list|rm <id…>|clear|path]            manage cached runs
+  sagecrawl --help
 
 Two phases. The CRAWL extracts what your task asks for, VERBATIM — one faithful
 .md per link (+ manifest.json). Every run is saved automatically to the runs cache
 (${cacheRoot()}).
 RESHAPE is separate and optional: turn that extraction into tables, splits or
-filtered subsets with \`docdna reshape <runId> --ask "…"\` (or Reshape in the Web
+filtered subsets with \`sagecrawl reshape <runId> --ask "…"\` (or Reshape in the Web
 UI). It works over the saved files, as many times as you like — crawl once,
 reshape many times.
 
@@ -43,12 +43,13 @@ Options:
                          default: "${DEFAULT_OPTIONS.task}"
   --url <url>            a target URL (repeatable; pair with --task for per-link tasks)
   --targets <file.json>  JSON file: a targets array ([{ "url", "task" }, ...])
-  --model <name>         model id for the engine (default: ${DEFAULT_OPTIONS.model})
+  --model <name>         model id for the engine (REQUIRED — e.g. qwen3-coder:30b for
+                         Ollama, or gpt-4o-mini for an OpenAI-compatible API)
   --provider <name>      ollama (default) | openai (any OpenAI-compatible API)
   --base-url <url>       API base URL for --provider openai
                          (e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1)
   --api-key <key>        API key for --provider openai
-                         (or set DOCDNA_API_KEY / OPENAI_API_KEY in the environment)
+                         (or set SAGECRAWL_API_KEY / OPENAI_API_KEY in the environment)
   --browser <mode>       never | auto | always   (default: ${DEFAULT_OPTIONS.browser})
   --concurrency <n>      parallel page fetches (default: ${DEFAULT_OPTIONS.concurrency})
   --max-pages <n>        safety cap, 0 = unlimited (default: ${DEFAULT_OPTIONS.maxPages})
@@ -64,15 +65,15 @@ Reshape (Phase 2 — over a saved run):
   --scan <id>            which link of the run to reshape (default: the only/first)
 
 Examples:
-  docdna https://docusaurus.io/docs --task "Extract all documentation"
-  docdna https://pizzeria.example/menu --task "Extract the full menu"
-  docdna --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get API docs"
-  OPENAI_API_KEY=sk-… docdna https://docs.dev --provider openai \\
+  sagecrawl https://docusaurus.io/docs --task "Extract all documentation"
+  sagecrawl https://pizzeria.example/menu --task "Extract the full menu"
+  sagecrawl --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get API docs"
+  OPENAI_API_KEY=sk-… sagecrawl https://docs.dev --provider openai \\
     --base-url https://api.openai.com/v1 --model gpt-4o-mini
-  docdna reshape 20260615-084021-3f9c1a --ask "make a table of the prices"
-  docdna runs                # list cached runs
-  docdna runs rm 20260615-084021-3f9c1a
-  docdna serve --port 4000
+  sagecrawl reshape 20260615-084021-3f9c1a --ask "make a table of the prices"
+  sagecrawl runs                # list cached runs
+  sagecrawl runs rm 20260615-084021-3f9c1a
+  sagecrawl serve --port 4000
 `;
 
 const OPTION_CONFIG = {
@@ -122,7 +123,10 @@ async function buildTargets(values, positionals) {
 }
 
 function optionsFromFlags(values) {
-  const o = {};
+  // The CLI is an app, not a library call: it always persists the run to the cache
+  // (rooted at the current working directory) so `sagecrawl runs` and `sagecrawl reshape`
+  // can find it afterwards. Library callers of crawlDocs save only on opt-in.
+  const o = { save: true };
   if (values.model) o.model = values.model;
   if (values.provider) o.provider = values.provider;
   if (values['base-url']) o.baseUrl = values['base-url'];
@@ -237,7 +241,7 @@ async function reshapeCommand(args, values) {
   const runId = args[0];
   const message = values.ask || (values.task && values.task[0]);
   if (!runId || !message) {
-    process.stderr.write(c(C.red, 'Usage: docdna reshape <runId> --ask "<request>" [--scan <id>]\n'));
+    process.stderr.write(c(C.red, 'Usage: sagecrawl reshape <runId> --ask "<request>" [--scan <id>]\n'));
     process.exitCode = 1;
     return;
   }
@@ -292,7 +296,7 @@ async function runsCommand(args, values) {
   if (sub === 'rm' || sub === 'remove' || sub === 'delete') {
     const ids = args.slice(1);
     if (!ids.length) {
-      process.stderr.write(c(C.red, 'Usage: docdna runs rm <id> [<id> …]\n'));
+      process.stderr.write(c(C.red, 'Usage: sagecrawl runs rm <id> [<id> …]\n'));
       process.exitCode = 1;
       return;
     }
@@ -333,7 +337,7 @@ async function runsCommand(args, values) {
       );
     }
   }
-  process.stdout.write(`\n${c(C.dim, 'Delete: docdna runs rm <id>   ·   clear all: docdna runs clear')}\n`);
+  process.stdout.write(`\n${c(C.dim, 'Delete: sagecrawl runs rm <id>   ·   clear all: sagecrawl runs clear')}\n`);
 }
 
 async function main() {

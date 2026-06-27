@@ -1,5 +1,5 @@
 // Low-level page actuation via Playwright. Elements are targeted by the
-// `data-docdna-id` attribute that perceive() stamped on the live DOM.
+// `data-sagecrawl-id` attribute that perceive() stamped on the live DOM.
 
 const SETTLE_MS = 350;
 
@@ -12,7 +12,7 @@ const SETTLE_MS = 350;
  */
 export async function clickRevealer(page, id) {
   const before = page.url();
-  const loc = page.locator(`[data-docdna-id="${id}"]`).first();
+  const loc = page.locator(`[data-sagecrawl-id="${id}"]`).first();
   try {
     await loc.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
     await loc.click({ timeout: 4000 });

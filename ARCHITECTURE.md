@@ -1,4 +1,4 @@
-# docdna — How It Works
+# sagecrawl — How It Works
 
 > A task-driven web crawler that turns any website into clean Markdown, using a
 > real browser + a local LLM. This document explains how the system works
@@ -10,7 +10,7 @@
 
 ## 1. What it does
 
-You give docdna **one or more URLs** plus a **plain-English task** (e.g. "Extract
+You give sagecrawl **one or more URLs** plus a **plain-English task** (e.g. "Extract
 all the documentation", "Get the pizza menu", "Put the images in image.md and the
 rest in extract.md"). For each site it:
 
@@ -92,13 +92,13 @@ is just a **consumer** of `crawlDocs`. No crawling logic lives outside the core.
 
 All three faces call the same core, [`crawlDocs`](src/index.mjs):
 
-- **CLI** — [`bin/cli.mjs`](bin/cli.mjs). `docdna <url> --task "..."`, plus
+- **CLI** — [`bin/cli.mjs`](bin/cli.mjs). `sagecrawl <url> --task "..."`, plus
   `serve` (Web UI) and `runs` (cache management). Renders the event stream to the
   terminal.
 - **Web UI** — [`ui/server.mjs`](ui/server.mjs) + [`ui/index.html`](ui/index.html).
   A `node:http` server with Server-Sent Events for live progress and a small REST
   surface over the runs cache.
-- **Library** — `import { crawlDocs } from 'docdna'`. Returns a `run` object that
+- **Library** — `import { crawlDocs } from 'sagecrawl'`. Returns a `run` object that
   is async-iterable (events), exposes `run.result` (a Promise), and `run.stop()`.
 
 ```js
@@ -303,8 +303,13 @@ Each output file is `{ filename, title, markdown, bytes, pages: string[] }`.
 
 ## 9. Persistence ([`src/lib/runs.mjs`](src/lib/runs.mjs), [`output.mjs`](src/lib/output.mjs))
 
-Every run is cached automatically under `<project>/.docdna/runs/` (override with
-`--cache-dir` / `DOCDNA_CACHE_DIR`). A run folder contains:
+A run is written to the cache **only when the caller opts in.** The **CLI and Web
+UI always do** (they are apps, so `sagecrawl runs` / Reshape can find the run later); a
+**library** call to `crawlDocs` writes **nothing** unless you pass `save: true` or a
+`cacheDir` — its full result is returned in memory instead (`scans[].files[].markdown`),
+to save wherever you like. The cache root defaults to the **current working
+directory** (`<cwd>/.sagecrawl/runs/`), overridable with `cacheDir` / `--cache-dir` /
+`SAGECRAWL_CACHE_DIR`. A saved run folder contains:
 
 ```
 20260621-160156-aa9498/         # run id: <timestamp>-<rand>
@@ -346,14 +351,18 @@ under `profiles/docs/framework/` are **legacy/unused** — the engine is univers
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `task` | "Extract the complete documentation." | Default task when none given |
-| `model` | `qwen3` | Ollama model. **Note:** install one you have, e.g. `--model qwen3-coder:30b` |
+| `model` | — (**required**) | Model id — Ollama (e.g. `qwen3-coder:30b`) or an OpenAI-compatible model (e.g. `gpt-4o-mini`). No default; you must choose one |
+| `provider` | `ollama` | `ollama` (local) \| `openai` (any OpenAI-compatible API) |
+| `baseUrl` | — | API base URL for `provider: openai` |
+| `apiKey` | — | API key for `provider: openai` (falls back to `SAGECRAWL_API_KEY` / `OPENAI_API_KEY`) |
 | `ollamaHost` | `127.0.0.1:11434` | Override the Ollama server |
 | `browser` | `auto` | `never` \| `auto` \| `always` |
 | `concurrency` | `4` | Parallel page renders |
 | `maxPages` | `0` | Per-scan page cap (0 = unlimited) |
 | `maxActions` | `15` | Per-page reveal action budget |
 | `include` / `exclude` | — | Regex URL scope filters |
-| `cacheDir` | — | Override the runs-cache root |
+| `save` | `false` | Persist the run to the cache. CLI/UI set this; a library call stays in memory unless set (or a `cacheDir` is given) |
+| `cacheDir` | `<cwd>/.sagecrawl/runs` | Where to save when saving is on |
 
 **Models:** the engine relies on the model for tool-quality JSON. `qwen3-coder:30b`
 is reliable for the reveal/link/layout JSON; very small models are not.

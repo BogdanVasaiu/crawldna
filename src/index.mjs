@@ -1,4 +1,4 @@
-// docdna — public API + core orchestration.
+// sagecrawl — public API + core orchestration.
 //
 // crawlDocs(targets, options) returns a `run` that is:
 //   - async-iterable (yields events, §6)
@@ -16,22 +16,31 @@ import { saveRun, scanIdFor } from './lib/runs.mjs';
 import { closeBrowser } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf } from './lib/url.mjs';
 import { isDocsTask } from './lib/task.mjs';
-import { resolveLlm } from './lib/llm.mjs';
+import { resolveLlm, checkModel } from './lib/llm.mjs';
 
 export const DEFAULT_OPTIONS = {
   task: 'Extract the complete documentation.',
-  model: 'qwen3',
+  model: '', // REQUIRED — no fake default. The engine needs a real model: a local
+  // Ollama model (e.g. 'qwen3-coder:30b') or an OpenAI-compatible model id. There is
+  // no model that is universally present, so pretending one exists only produces a
+  // silent failure. Pick one explicitly (see `provider`).
   provider: 'ollama', // 'ollama' (local) | 'openai' (any OpenAI-compatible API: URL + key)
   ollamaHost: undefined, // override the Ollama server URL (default: http://127.0.0.1:11434)
   baseUrl: undefined, // OpenAI-compatible API base URL (provider 'openai')
-  apiKey: undefined, // API key (provider 'openai'); falls back to DOCDNA_API_KEY / OPENAI_API_KEY
+  apiKey: undefined, // API key (provider 'openai'); falls back to SAGECRAWL_API_KEY / OPENAI_API_KEY
   browser: 'auto', // 'never' | 'auto' | 'always'
   concurrency: 4,
   maxPages: 0, // 0 = unlimited
   maxActions: 15,
   include: undefined,
   exclude: undefined,
-  cacheDir: undefined, // override the runs-cache root (default: <project>/.docdna/runs)
+  // Persistence is OPT-IN. As a library, sagecrawl writes NOTHING by default: the full
+  // result (scans[].files[].markdown) is returned in memory for the caller to save
+  // wherever they like. A run is written to the cache ONLY when the caller opts in —
+  // by setting `save: true`, or by giving an explicit `cacheDir` (or SAGECRAWL_CACHE_DIR).
+  // The CLI and Web UI are apps, so they pass `save: true` (cache rooted at cwd).
+  save: false,
+  cacheDir: undefined, // where to save when saving is on (default: <cwd>/.sagecrawl/runs)
   onEvent: undefined,
 };
 
@@ -102,6 +111,11 @@ export function crawlDocs(targets, options = {}) {
   // Resolve the model provider once; the engine reads ctx.options.llm and stays
   // provider-agnostic (Ollama or any OpenAI-compatible API).
   opts.llm = resolveLlm(opts);
+
+  // Persistence is opt-in (see DEFAULT_OPTIONS.save): write a run to the cache only
+  // when the caller asked — explicitly via `save`, or implicitly by naming a place
+  // to put it (`cacheDir` / SAGECRAWL_CACHE_DIR). Otherwise the crawl stays in memory.
+  const willSave = opts.save === true || !!opts.cacheDir || !!process.env.SAGECRAWL_CACHE_DIR;
 
   const list = normalizeTargets(targets, opts.task);
   const stream = createEventStream();
@@ -224,6 +238,24 @@ export function crawlDocs(targets, options = {}) {
 
   (async () => {
     try {
+      // Health-check the model ONCE before crawling. The judgment calls all
+      // `.catch()` and bias toward keep/follow/reveal, so a misconfigured model
+      // would silently degrade the whole crawl to heuristics (no AI reveal/scope/
+      // link-gating) and the caller would get poor output with no clue why. Warn
+      // loudly instead — the crawl still runs (heuristics keep it from losing
+      // content), but the reason is now visible.
+      const health = await checkModel(opts.llm);
+      if (!health.ok) {
+        emit({
+          type: 'warn',
+          reason: 'model',
+          message:
+            `Model not usable (${health.reason}). Running in DEGRADED heuristic mode — ` +
+            `AI reveal/scope/link-gating are OFF. Set a working model: a running local ` +
+            `Ollama model (e.g. model:'qwen3-coder:30b'), or provider:'openai' with baseUrl + apiKey.`,
+        });
+      }
+
       for (const scan of scans) {
         if (stopped) break;
         ctx.beginScan(scan);
@@ -275,19 +307,24 @@ export function crawlDocs(targets, options = {}) {
         }
       }
 
-      // Every run is cached: one folder, one subfolder per scan.
-      try {
-        const saved = await saveRun({
-          targets: list,
-          options: opts,
-          scans,
-          durationMs: result.stats.durationMs,
-          warnings: result.warnings,
-        });
-        result.run = { id: saved.id, dir: saved.dir, scans: saved.summary.scans };
-        emit({ type: 'saved', runId: saved.id, dir: saved.dir, scans: saved.summary.scans });
-      } catch (err) {
-        emit({ type: 'warn', reason: 'cache', message: 'Failed to save run: ' + (err && err.message) });
+      // Persistence is opt-in. When the caller didn't ask to save (the library
+      // default), write nothing: result.scans[].files[].markdown is already in
+      // memory for them to put wherever they like. When they did opt in, save one
+      // folder per run (one subfolder per scan) under the cache root (cwd default).
+      if (willSave) {
+        try {
+          const saved = await saveRun({
+            targets: list,
+            options: opts,
+            scans,
+            durationMs: result.stats.durationMs,
+            warnings: result.warnings,
+          });
+          result.run = { id: saved.id, dir: saved.dir, scans: saved.summary.scans };
+          emit({ type: 'saved', runId: saved.id, dir: saved.dir, scans: saved.summary.scans });
+        } catch (err) {
+          emit({ type: 'warn', reason: 'cache', message: 'Failed to save run: ' + (err && err.message) });
+        }
       }
 
       await closeBrowser();

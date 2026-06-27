@@ -1,6 +1,6 @@
 // The LLM transport layer — the ONE place that talks to a model provider.
 //
-// docdna's judgment layer (src/engine/decide.mjs) and reshape (src/reshape.mjs)
+// sagecrawl's judgment layer (src/engine/decide.mjs) and reshape (src/reshape.mjs)
 // are provider-agnostic: they call `chat(llm, system, user)` and never know which
 // backend answered. Two backends are supported:
 //
@@ -53,7 +53,7 @@ function joinUrl(base, path) {
  * Normalise raw options into a `{ provider, model, baseUrl, apiKey }` descriptor.
  * Backward compatible: an absent provider means 'ollama', and `ollamaHost` keeps
  * working. For the 'openai' provider, the API key falls back to the environment
- * (DOCDNA_API_KEY, then OPENAI_API_KEY) so it never has to be put on the CLI.
+ * (SAGECRAWL_API_KEY, then OPENAI_API_KEY) so it never has to be put on the CLI.
  *
  * @param {object} [options]
  * @param {string} [options.provider]   'ollama' (default) | 'openai'
@@ -70,7 +70,7 @@ export function resolveLlm(options = {}) {
 
   if (provider === 'openai') {
     const apiKey =
-      options.apiKey || process.env.DOCDNA_API_KEY || process.env.OPENAI_API_KEY || '';
+      options.apiKey || process.env.SAGECRAWL_API_KEY || process.env.OPENAI_API_KEY || '';
     return { provider, model, baseUrl: openaiBase(options.baseUrl), apiKey };
   }
 
@@ -147,6 +147,28 @@ export async function chat(llm, system, user) {
   return llm.provider === 'openai'
     ? openaiChat(llm, system, user)
     : ollamaChat(llm, system, user);
+}
+
+/**
+ * One-time health check run before a crawl: confirm the configured model actually
+ * answers. The crawl's judgment calls (decide.mjs) all `.catch()` and bias toward
+ * keep/follow/reveal, so a misconfigured model (wrong key, unreachable host,
+ * un-pulled model) would otherwise degrade to heuristics SILENTLY — bad output
+ * with no explanation. This lets the caller warn LOUDLY instead. Best-effort and
+ * bounded: any throw means "not usable" with a short reason; it never throws.
+ *
+ * @param {{provider:string, model:string, baseUrl:string, apiKey:string}} llm
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function checkModel(llm) {
+  if (!llm || !llm.model) return { ok: false, reason: 'no model selected' };
+  if (llm.provider === 'openai' && !llm.baseUrl) return { ok: false, reason: 'no API base URL set' };
+  try {
+    await chat(llm, 'Reply with the single word OK.', 'ping');
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String((err && err.message) || err).slice(0, 200) };
+  }
 }
 
 /**

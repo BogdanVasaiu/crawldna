@@ -1,6 +1,4 @@
-# docdna
-
-> The name `docdna` is a placeholder and will be renamed.
+# sagecrawl
 
 A **general, task-driven web crawler**. Give it one or more links, each with a
 natural-language **task** describing what to extract. It crawls each site to
@@ -32,8 +30,8 @@ It runs three ways from a single headless core:
 Standalone:
 
 ```sh
-git clone <repo> docdna
-cd docdna
+git clone <repo> sagecrawl
+cd sagecrawl
 npm install
 node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation"
 ```
@@ -41,20 +39,28 @@ node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation"
 As a library:
 
 ```sh
-npm install docdna
+npm install sagecrawl
 ```
 
 ### Requirements
 
 - **Node.js ≥ 20** (uses built-in `fetch`, `node:util.parseArgs`, web streams).
-- **[Ollama](https://ollama.com)** running locally with a tool-calling model for
-  the agentic engine. Default model: `qwen3` (the `gemma` family also works).
-  Pull it once with `ollama pull qwen3`, or pass `--model <name>` to use one you
-  already have.
-- **[Playwright](https://playwright.dev) Chromium** — *only* needed for crawls
-  that take actions / reveal hidden content (the engine). Pure structured or
-  static extraction (e.g. a docs site exposing `llms-full.txt` or a sitemap)
-  runs **without** it. Install the browser once:
+- **A language model** — the engine needs one for its AI judgment (reveal / scope /
+  link-gating / reshape). **There is no default — you must choose one.** Two ways,
+  pick either:
+  - **[Ollama](https://ollama.com)** running locally — pull a capable model and pass
+    it: `ollama pull qwen3-coder:30b`, then `--model qwen3-coder:30b`.
+  - **Any OpenAI-compatible API** (OpenAI, OpenRouter, Groq, Together, …):
+    `--provider openai --base-url <…/v1> --model <id> --api-key <key>` (the key can
+    also come from `SAGECRAWL_API_KEY` / `OPENAI_API_KEY`).
+
+  If the model isn't reachable the crawl still runs but **warns** that it has dropped
+  to degraded heuristic mode (no AI reveal/scope/link-gating) — so you never get poor
+  output without knowing why.
+- **[Playwright](https://playwright.dev) Chromium** — needed for crawls that take
+  actions / reveal hidden content (the engine). Pure structured or static extraction
+  (e.g. a docs site exposing `llms-full.txt` or a sitemap) runs **without** it.
+  Install the browser once:
 
   ```sh
   npx playwright install chromium
@@ -66,26 +72,27 @@ actually needs the browser.
 ## CLI
 
 ```sh
-docdna <url> [--task "..."]                       # crawl one site (Phase 1)
-docdna crawl <url> [--task "..."] [--model qwen3-coder:30b]
+sagecrawl <url> [--task "..."]                       # crawl one site (Phase 1)
+sagecrawl crawl <url> [--task "..."] [--model qwen3-coder:30b]
                     [--browser auto|never|always] [--concurrency 4]
                     [--include "..."] [--exclude "..."] [--max-pages 0]
                     [--cache-dir <dir>]
-docdna reshape <runId> --ask "..."                # reshape a saved extraction (Phase 2)
-docdna runs [list|rm <id…>|clear|path]            # manage cached runs
-docdna serve [--port 4000]                        # start the Web UI
-docdna --help
+sagecrawl reshape <runId> --ask "..."                # reshape a saved extraction (Phase 2)
+sagecrawl runs [list|rm <id…>|clear|path]            # manage cached runs
+sagecrawl serve [--port 4000]                        # start the Web UI
+sagecrawl --help
 ```
 
-**Every run is saved automatically** to the runs cache (`<project>/.docdna/runs`,
-overridable with `--cache-dir` or the `DOCDNA_CACHE_DIR` env var) — there is no
-`--out` flag. Each run is one folder: the grouped Markdown file(s), a
-`manifest.json`, and a small `run.json` summary.
+**The CLI saves every run automatically** to the runs cache (`<cwd>/.sagecrawl/runs` —
+rooted at the directory you run from, overridable with `--cache-dir` or the
+`SAGECRAWL_CACHE_DIR` env var) — there is no `--out` flag. Each run is one folder: the
+grouped Markdown file(s), a `manifest.json`, and a small `run.json` summary.
+*(As a **library**, saving is opt-in — see [Library API](#library-api).)*
 
 **Per-link tasks** — either repeated pairs:
 
 ```sh
-docdna --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get API docs"
+sagecrawl --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get API docs"
 ```
 
 …or a JSON file (`--targets targets.json`) whose contents are a `targets` array:
@@ -100,16 +107,16 @@ docdna --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get 
 ### Managing cached runs
 
 ```sh
-docdna runs                 # list saved runs (id, date, task, files)
-docdna runs rm <id> [<id>…] # delete specific run(s)
-docdna runs clear           # delete every cached run
-docdna runs path            # print the cache directory
+sagecrawl runs                 # list saved runs (id, date, task, files)
+sagecrawl runs rm <id> [<id>…] # delete specific run(s)
+sagecrawl runs clear           # delete every cached run
+sagecrawl runs path            # print the cache directory
 ```
 
 ## Web UI
 
 ```sh
-docdna serve --port 4000
+sagecrawl serve --port 4000
 # open http://localhost:4000
 ```
 
@@ -132,7 +139,7 @@ The UI has two steps:
 The single most important contract (refdna depends on it):
 
 ```js
-import { crawlDocs } from 'docdna';
+import { crawlDocs } from 'sagecrawl';
 
 const run = crawlDocs(targets, options);
 
@@ -165,26 +172,54 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | option | default | meaning |
 |---|---|---|
 | `task` | `"Extract the complete documentation."` | shared/default task |
-| `model` | `"qwen3"` | Ollama model for the engine |
+| `model` | — (**required**) | model id — Ollama (e.g. `"qwen3-coder:30b"`) or OpenAI-compatible (e.g. `"gpt-4o-mini"`) |
+| `provider` | `"ollama"` | `"ollama"` (local) \| `"openai"` (any OpenAI-compatible API) |
+| `baseUrl` | — | API base URL for `provider: "openai"` |
+| `apiKey` | — | API key for `provider: "openai"` (falls back to `SAGECRAWL_API_KEY` / `OPENAI_API_KEY`) |
+| `ollamaHost` | `127.0.0.1:11434` | override the Ollama server |
 | `browser` | `"auto"` | `never` \| `auto` \| `always` (lazy-loads Playwright) |
 | `concurrency` | `4` | parallel page fetches |
 | `maxPages` | `0` | safety cap (0 = unlimited) |
 | `maxActions` | `15` | per-page action cap for the engine |
 | `include` | — | only crawl URLs matching (string regex or `RegExp`) |
 | `exclude` | — | skip URLs matching |
-| `cacheDir` | — | override the runs-cache root (default `<project>/.docdna/runs`) |
+| `save` | `false` | persist the run to the cache. **Library default: off** (result returned in memory). The CLI/UI turn it on |
+| `cacheDir` | — | where to save when saving is on (default `<cwd>/.sagecrawl/runs`); setting it also turns saving on |
 | `onEvent` | — | `(ev) => void` callback |
 
 ### Result
 
 ```js
 {
-  pages: [ { url, task, title, markdown, meta: { strategy, framework?, fetchedAt, bytes } } ],
+  scans: [ {                          // one entry per submitted link
+    scanId, index, url, task, title,
+    pages: [ { url, task, title, markdown, meta: { strategy, framework?, fetchedAt, bytes } } ],
+    files: [ { filename, title, markdown, bytes, pages: [url, …] } ],  // the verbatim .md, in memory
+    stats, warnings,
+  } ],
   stats: { pages, durationMs, strategyCounts: { 'docs:llms-full', 'docs:sitemap', 'docs:framework', agent } },
   warnings: [ { url?, reason, message } ],
-  run: { id, dir, files: [ { filename, bytes } ] }   // where this run was cached
+  run: { id, dir, scans } | null,     // null unless the run was SAVED (see below)
 }
 ```
+
+**As a library, nothing is written to disk by default.** Every extracted file's
+Markdown is already here in memory under `scans[].files[].markdown` — save it
+wherever you like:
+
+```js
+import { crawlDocs } from 'sagecrawl';
+import { writeFile } from 'node:fs/promises';
+
+const run = crawlDocs([{ url, task }], { provider: 'openai', baseUrl, apiKey, model: 'gpt-4o-mini' });
+const { scans } = await run.result;                 // no disk writes
+for (const s of scans)
+  for (const f of s.files)
+    await writeFile(`./out/${f.filename}`, f.markdown);   // you decide where
+```
+
+To *also* have sagecrawl persist a run to its cache (so `reshape` can reuse it), pass
+`save: true` or a `cacheDir` — then `result.run` is populated.
 
 ## How it crawls
 
@@ -235,8 +270,9 @@ skipped with a warning — never circumvented.
 
 ## Output
 
-Every run is saved automatically — one folder per run under the runs cache
-(`<project>/.docdna/runs/<runId>/`):
+The **CLI and Web UI** save every run automatically — one folder per run under the
+runs cache (`<cwd>/.sagecrawl/runs/<runId>/`). *(As a library, saving is opt-in — see
+[Library API](#library-api); the layout below is what gets written when it's on.)*
 
 - **One verbatim `.md` per link.** The crawl consolidates everything it kept for a
   link into a single faithful Markdown file (named from the task), in crawl order.
@@ -249,7 +285,7 @@ Every run is saved automatically — one folder per run under the runs cache
 - **`run.json`** — a small summary used to list runs quickly.
 
 Each Markdown file starts with a short YAML front-matter block (`task`,
-`generatedAt`, `sources`). Manage saved runs with `docdna runs …` or the Web UI's
+`generatedAt`, `sources`). Manage saved runs with `sagecrawl runs …` or the Web UI's
 "Previous runs" list.
 
 ## Reshape (Phase 2)
@@ -262,8 +298,8 @@ into several files. It is **value-faithful**: every kept name, number, price and
 time is copied exactly — it never invents or alters a value.
 
 ```sh
-docdna reshape <runId> --ask "make a table of the prices"
-docdna reshape <runId> --ask "split the menu into one file per category" --scan 01-example-com
+sagecrawl reshape <runId> --ask "make a table of the prices"
+sagecrawl reshape <runId> --ask "split the menu into one file per category" --scan 01-example-com
 ```
 
 In the Web UI, open a saved link and use the **Reshape** panel — each answer is

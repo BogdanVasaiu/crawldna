@@ -44,12 +44,12 @@ export async function revealAll(page, ctx, url, task) {
         const marked = [];
         for (const el of document.body.querySelectorAll('*')) {
           if (isHidden(el)) {
-            el.setAttribute('data-docdna-hidden', '1');
+            el.setAttribute('data-sagecrawl-hidden', '1');
             marked.push(el);
           }
         }
         const out = document.documentElement.outerHTML;
-        for (const el of marked) el.removeAttribute('data-docdna-hidden');
+        for (const el of marked) el.removeAttribute('data-sagecrawl-hidden');
         return out;
       });
     } catch {
