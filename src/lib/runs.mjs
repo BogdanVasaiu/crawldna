@@ -302,6 +302,30 @@ export async function readChatFile(id, scanId, name, opts = {}) {
   return readFile(path.join(scanChatDir(id, scanId, opts), base), 'utf8');
 }
 
+// --- activity trace: the live exploration timeline, kept for later replay ----
+// The Web UI streams a narration (sites, clicks/navigations, captures) while a
+// crawl runs and renders it as an Activity log + an exploration Tree. Persisting
+// a compact copy lets a finished or reopened run show the same Activity/Tree
+// instead of losing them the moment the crawl ends.
+
+/** Persist a run's compact activity trace ([events]) for later replay. */
+export async function saveActivity(id, events, opts = {}) {
+  const dir = runDir(id, opts);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'activity.json'), JSON.stringify({ events: events || [] }) + '\n', 'utf8');
+}
+
+/** Read a run's saved activity trace ({ events }); empty if none was recorded. */
+export async function readActivity(id, opts = {}) {
+  try {
+    const raw = await readFile(path.join(runDir(id, opts), 'activity.json'), 'utf8');
+    const a = JSON.parse(raw);
+    return { events: Array.isArray(a.events) ? a.events : [] };
+  } catch {
+    return { events: [] };
+  }
+}
+
 /** Delete one run. */
 export async function deleteRun(id, opts = {}) {
   await rm(runDir(id, opts), { recursive: true, force: true });

@@ -2,7 +2,7 @@
 // sagecrawl CLI — a thin face over the core (§7). All logic lives in src/index.mjs.
 
 import { parseArgs } from 'node:util';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
 import { crawlDocs, DEFAULT_OPTIONS } from '../src/index.mjs';
 import { listRuns, deleteRun, deleteAllRuns, cacheRoot } from '../src/lib/runs.mjs';
@@ -26,9 +26,13 @@ Usage:
   sagecrawl <url> [--task "..."]                       crawl one site
   sagecrawl crawl <url> [options]                      crawl one or more sites
   sagecrawl reshape <runId> --ask "..."                reshape a saved extraction (Phase 2)
-  sagecrawl serve [--port 4000]                        start the Web UI
+  sagecrawl serve [--port 4000]                        start the optional Web UI (source repo only)
   sagecrawl runs [list|rm <id…>|clear|path]            manage cached runs
   sagecrawl --help
+
+The crawler is CLI- and library-first; the Web UI is an optional frontend that
+ships only with the source repository (not the npm package), so it never weighs
+down a \`sagecrawl\` dependency. \`serve\` explains how to get it if it isn't present.
 
 Two phases. The CRAWL extracts what your task asks for, VERBATIM — one faithful
 .md per link (+ manifest.json). Every run is saved automatically to the runs cache
@@ -363,6 +367,31 @@ async function main() {
   }
 
   if (positionals[0] === 'serve') {
+    // The Web UI is OPTIONAL and ships only with the repository, not the npm
+    // package (it would be dead weight for library/CLI users). Detect whether the
+    // UI is present and, if not, explain how to get it instead of crashing — the
+    // crawler itself works fully without it.
+    const uiEntry = new URL('../ui/server.mjs', import.meta.url);
+    let hasUI = true;
+    try {
+      await stat(uiEntry);
+    } catch {
+      hasUI = false;
+    }
+    if (!hasUI) {
+      process.stderr.write(
+        c(C.yellow, '\nThe Web UI is optional and not bundled with the npm package') +
+          ' (to keep it lightweight).\n\n' +
+          'The crawler works fully without it — use the CLI or the library API:\n' +
+          c(C.cyan, '  sagecrawl <url> --task "…"   --model qwen3-coder:30b\n') +
+          c(C.cyan, "  import { crawlDocs } from 'sagecrawl'\n") +
+          '\nTo use the Web UI, run it from the source repository:\n' +
+          c(C.cyan, '  git clone <sagecrawl repo> && cd sagecrawl\n') +
+          c(C.cyan, '  npm install && npm run serve\n'),
+      );
+      process.exitCode = 1;
+      return;
+    }
     const { startServer } = await import('../ui/server.mjs');
     const port = Number(values.port) || 4000;
     await startServer({ port });

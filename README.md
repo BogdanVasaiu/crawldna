@@ -18,8 +18,11 @@ of times. **Crawl once, reshape many times.**
 It runs three ways from a single headless core:
 
 1. **CLI** — point it at link(s) + task(s), get Markdown.
-2. **Web UI** — a control panel to set links/tasks, run, and watch live.
-3. **Importable library** — another Node project imports it and consumes results.
+2. **Importable library** — another Node project imports it and consumes results.
+3. **Web UI** *(optional)* — a control panel to set links/tasks, run, and watch
+   live. It's a thin frontend over the same core and ships **only with the source
+   repository**, never the npm package — so a `sagecrawl` dependency stays lean and
+   the CLI/library work with zero UI weight.
 
 > 📐 **How it works:** see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full
 > pipeline — the AI-driven reveal engine, the two-phase (crawl → reshape) model,
@@ -41,6 +44,10 @@ As a library:
 ```sh
 npm install sagecrawl
 ```
+
+The npm package is just the crawler core + CLI — the Web UI is **not** included, so
+it adds no dead weight to your dependency. If you want the UI, use the repo install
+above and run `npm run serve` (see [Web UI](#web-ui)).
 
 ### Requirements
 
@@ -115,10 +122,17 @@ sagecrawl runs path            # print the cache directory
 
 ## Web UI
 
-```sh
-sagecrawl serve --port 4000
-# open http://localhost:4000
-```
+> **Optional, and from the repo only.** The Web UI ships with the source repository,
+> not the npm package. Run it from a repo clone (`git clone … && npm install`):
+>
+> ```sh
+> npm run serve            # or: node bin/cli.mjs serve --port 4000
+> # open http://localhost:4000
+> ```
+>
+> If you run `sagecrawl serve` from a bare `npm install` (no UI present), it won't
+> crash — it prints how to get the UI and points you at the CLI/library, which do
+> everything without it.
 
 The UI has two steps:
 

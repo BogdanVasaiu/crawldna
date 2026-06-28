@@ -196,8 +196,9 @@
   .runview { display:flex; flex-direction:column; height:calc(100vh - 56px); }
 
   /* top strip: link tabs (left) + progress (right) */
-  .runtop { display:flex; align-items:center; gap:16px; padding:10px 20px;
+  .runtop { display:flex; align-items:center; gap:12px; padding:10px 20px;
             background:rgba(16,16,19,.7); backdrop-filter:blur(8px); border-bottom:1px solid var(--b1); flex-shrink:0; }
+  .tabs-label { color:var(--t4); font-size:9px; text-transform:uppercase; letter-spacing:.09em; font-weight:600; flex-shrink:0; }
   .link-tabs { display:flex; gap:3px; overflow-x:auto; flex:1; min-width:0;
                padding:4px; background:var(--s3); border:1px solid var(--b2); border-radius:var(--r);
                box-shadow:0 2px 6px rgba(0,0,0,.5) inset; scrollbar-width:thin; }
@@ -236,15 +237,18 @@
                     animation:shine 1.6s linear infinite; }
   @keyframes shine { 0%{ transform:translateX(-100%);} 100%{ transform:translateX(100%);} }
 
-  /* body: main column (active link) + activity (live only) */
-  .run-body { flex:1; display:grid; grid-template-columns:1fr; min-height:0; }
-  .run-body.live { grid-template-columns:1fr 360px; }
-  .run-body.chat { grid-template-columns:1fr clamp(330px, 33%, 460px); }
+  /* body: main column (active link) + a single right panel (Activity/Tree/Reshape) */
+  .run-body { flex:1; display:grid; grid-template-columns:1fr clamp(340px, 34%, 460px); min-height:0; }
   .run-main { display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-  .run-subhead { padding:16px 24px 0; flex-shrink:0; }
-  .run-subhead .rsh-title { font-weight:600; font-size:15px; color:var(--t1); letter-spacing:-.01em;
-                            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .run-subhead .rsh-sub { color:var(--t3); font-family:var(--mono); font-size:11px; margin-top:4px; word-break:break-all; }
+  /* slim context line for the active link — replaces the old bulky subhead */
+  .ctx { display:flex; align-items:center; gap:8px; flex-shrink:0; margin:13px 24px 0; min-width:0; font-size:11.5px; }
+  .ctx:empty { display:none; }
+  .ctx .ctx-ico { flex-shrink:0; font-size:11px; opacity:.9; }
+  .ctx a { color:var(--t2); font-family:var(--mono); text-decoration:none; min-width:0;
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ctx a:hover { color:var(--a); }
+  .ctx .ctx-task { color:var(--t3); flex-shrink:1; min-width:0; max-width:50%; padding-left:9px; margin-left:1px;
+                   border-left:1px solid var(--b2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
   /* file tabs (segmented control) */
   .files { display:flex; gap:3px; flex-wrap:wrap; align-items:center; flex-shrink:0;
@@ -335,29 +339,41 @@
   .md-body .md-gallery a, .md-body figure.md-figure a { display:inline-flex; line-height:0; }
   .md-body .md-gallery img:hover, .md-body figure.md-figure img:hover { border-color:var(--a-border); }
 
-  /* ===================== activity sidebar (live) ===================== */
-  .activity { border-left:1px solid var(--b1); overflow:auto; min-height:0; padding:16px; background:var(--s1); }
-  .activity h3 { font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--t3); margin:14px 0 8px; font-weight:600; }
-  /* live activity: Activity/Graph toggle + exploration graph */
-  .act-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .act-head h3 { margin:14px 0 8px; }
-  .act-toggle { display:inline-flex; gap:2px; background:var(--s3); border:1px solid var(--b1); border-radius:var(--r-sm); padding:2px; }
-  .act-tab { font-size:11px; padding:4px 10px; border-radius:5px; color:var(--t3); background:transparent; border:none; cursor:pointer; font-family:inherit; }
-  .act-tab:hover { color:var(--t1); }
-  .act-tab.on { background:var(--s5); color:var(--t1); }
-  .graph { overflow:hidden; border:1px solid var(--b1); border-radius:var(--r-sm); background:radial-gradient(120% 120% at 50% 0%, var(--s2), var(--s1)); height:64vh; min-height:300px; position:relative; }
-  .graph-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--t4); font-size:11.5px; text-align:center; padding:26px; line-height:1.6; }
-  .graph svg { width:100%; height:100%; display:block; }
-  .g-edge { stroke:var(--b3); stroke-width:1.5; stroke-linecap:round; }
-  .g-edge.g-edge-live { stroke:var(--a-border); }
-  .g-node { stroke-width:2; transition:r .25s ease; }
-  .g-site { fill:var(--a-dim); stroke:var(--a); }
-  .g-view { fill:var(--s5); stroke:var(--b3); }
-  .g-cap  { fill:var(--a-dim); stroke:var(--a); }
-  .g-cur  { fill:var(--a2); stroke:#bfe9ff; stroke-width:2.5; }
-  .g-label { fill:var(--t2); font-size:10px; font-family:var(--font); paint-order:stroke; stroke:var(--bg); stroke-width:3px; stroke-linejoin:round; }
-  .g-clicks { fill:var(--t1); font-size:10px; font-weight:700; font-family:var(--mono); pointer-events:none; }
-  .now { font-size:12.5px; margin-bottom:8px; color:var(--t2); padding:9px 11px; background:var(--s2);
+  /* ===================== right panel: Activity / Tree / Reshape ============ */
+  .side { border-left:1px solid var(--b1); display:flex; flex-direction:column; min-height:0; background:var(--s1); }
+  .side-tabs { display:flex; gap:3px; padding:9px 12px; border-bottom:1px solid var(--b1); flex-shrink:0;
+               background:var(--s2); }
+  .side-tab { flex:1; padding:7px 10px; border:1px solid transparent; border-radius:var(--r-sm); background:transparent;
+              color:var(--t3); font-size:11.5px; font-weight:600; cursor:pointer; transition:color .15s, background .15s, border-color .15s; }
+  .side-tab:hover { color:var(--t1); background:rgba(255,255,255,.04); transform:none; }
+  .side-tab.on { color:var(--a); background:var(--s4); border-color:var(--b2); box-shadow:0 1px 4px rgba(0,0,0,.5); }
+  .side-body { flex:1; min-height:0; display:flex; }
+  .side-pane { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+
+  /* Activity log pane */
+  #pane-activity { overflow:auto; padding:14px 16px; }
+
+  /* exploration Tree pane (indented, file-tree style) */
+  #pane-tree { padding:14px 14px 12px; }
+  .tree-wrap { flex:1; min-height:0; overflow:auto; border:1px solid var(--b1); border-radius:var(--r-sm);
+               background:radial-gradient(140% 120% at 50% 0%, var(--s2), var(--s1)); padding:12px 14px; position:relative; }
+  .tree { font-family:var(--mono); font-size:11.5px; line-height:1.7; }
+  .tw-row { display:flex; align-items:center; padding:1px 4px; border-radius:5px; }
+  .tw-row.tw-cur { background:var(--a-dim); }
+  .tw-guide { color:var(--b3); white-space:pre; flex-shrink:0; }
+  .tw-ico { width:15px; text-align:center; flex-shrink:0; font-weight:700; }
+  .tw-site { color:var(--a); } .tw-link { color:var(--blue); } .tw-click { color:var(--t3); }
+  .tw-label { color:var(--t1); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tw-row.tw-cur .tw-label { color:var(--a); font-weight:600; }
+  .tw-cap { color:var(--a); margin-left:7px; flex-shrink:0; font-weight:700; }
+  .tree-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--t4);
+                font-size:11.5px; text-align:center; padding:26px; line-height:1.65; }
+  .tree-legend { flex-shrink:0; margin-top:9px; color:var(--t4); font-size:10.5px; font-family:var(--mono);
+                 display:flex; flex-wrap:wrap; gap:4px 14px; justify-content:center; }
+  .tree-legend b { font-weight:700; } .tree-legend .lg-link { color:var(--blue); }
+  .tree-legend .lg-click { color:var(--t2); } .tree-legend .lg-cap { color:var(--a); }
+
+  .now { font-size:12.5px; margin-bottom:10px; color:var(--t2); padding:9px 11px; background:var(--s2);
          border:1px solid var(--b1); border-radius:var(--r-sm); word-break:break-all; }
   .now .s { color:var(--a); font-weight:600; text-transform:uppercase; font-size:10px; letter-spacing:.05em; margin-right:6px; }
   .log .line { padding:4px 0; border-bottom:1px dotted var(--b1); font-size:11.5px; color:var(--t2); font-family:var(--mono); }
@@ -369,8 +385,7 @@
   .tag.follow{ color:var(--blue);} .tag.extract{ color:var(--a);} .tag.done{ color:var(--t4);}
   .warn { color:var(--amb); } .err { color:var(--err); }
 
-  /* ===================== reshape panel (view mode) ===================== */
-  .reshape { border-left:1px solid var(--b1); display:flex; flex-direction:column; min-height:0; background:var(--s1); }
+  /* ===================== reshape pane (inside the right panel) ============= */
   .rs-head { padding:15px 16px 12px; border-bottom:1px solid var(--b1); flex-shrink:0; }
   .rs-title { font-size:13px; font-weight:700; color:var(--t1); display:flex; align-items:center; gap:8px; }
   .rs-title::before { content:''; width:14px; height:2px; border-radius:2px; background:linear-gradient(90deg,var(--a),transparent); }
@@ -403,8 +418,8 @@
   @media (max-width:720px) {
     .brand-tag { display:none; }
     .grid2 { grid-template-columns:1fr; }
-    .run-body.live, .run-body.chat { grid-template-columns:1fr; }
-    .activity, .reshape { border-left:none; border-top:1px solid var(--b1); }
+    .run-body { grid-template-columns:1fr; }
+    .side { border-left:none; border-top:1px solid var(--b1); min-height:46vh; }
     .runtop-right { width:auto; }
     .viewer { padding:18px 16px 40px; }
   }
@@ -584,6 +599,7 @@
 <section class="runview hidden" id="view-run">
   <!-- top strip: one tab per link + progress for the active link -->
   <div class="runtop">
+    <span class="tabs-label">links</span>
     <div class="link-tabs" id="link-tabs"></div>
     <div class="runtop-right">
       <div class="stats" id="run-stats">
@@ -608,42 +624,53 @@
   <div class="run-body" id="run-body">
     <!-- active link: its files + scrollable viewer -->
     <div class="run-main">
-      <div class="run-subhead">
-        <div class="rsh-title" id="run-title">—</div>
-        <div class="rsh-sub" id="run-sub"></div>
-      </div>
+      <div class="ctx" id="run-ctx"></div>
       <div class="files" id="run-files"><span class="label">files</span><span class="muted">no files yet</span></div>
       <div class="viewer" id="run-viewer"><div class="empty">Select a file to view its Markdown.</div></div>
     </div>
-    <!-- live activity (shown only during a crawl) -->
-    <div class="activity hidden" id="run-activity">
-      <div class="now" id="now"><span class="muted">starting…</span></div>
-      <div class="act-head">
-        <h3>What it did</h3>
-        <div class="act-toggle" role="tablist">
-          <button type="button" class="act-tab on" id="tab-log">Activity</button>
-          <button type="button" class="act-tab" id="tab-graph">Graph</button>
-        </div>
+
+    <!-- right panel: Activity log · exploration Tree · Reshape (all reachable) -->
+    <aside class="side hidden" id="run-side">
+      <div class="side-tabs" role="tablist">
+        <button type="button" class="side-tab on" id="st-activity" data-tab="activity">Activity</button>
+        <button type="button" class="side-tab" id="st-tree" data-tab="tree">Tree</button>
+        <button type="button" class="side-tab hidden" id="st-reshape" data-tab="reshape">Reshape</button>
       </div>
-      <div class="log" id="log"></div>
-      <div class="graph hidden" id="run-graph">
-        <div class="graph-empty" id="graph-empty">The exploration graph will appear as the crawl clicks and navigates…</div>
-        <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="side-body">
+        <!-- Activity: live (or replayed) narration -->
+        <section class="side-pane" id="pane-activity">
+          <div class="now" id="now"><span class="muted">starting…</span></div>
+          <div class="log" id="log"></div>
+        </section>
+
+        <!-- Tree: indented map of pages (links) and clicks -->
+        <section class="side-pane hidden" id="pane-tree">
+          <div class="tree-wrap">
+            <div class="tree-empty" id="tree-empty">The exploration tree will grow here as the crawl follows links and clicks.</div>
+            <div class="tree" id="tree"></div>
+          </div>
+          <div class="tree-legend">
+            <span class="lg-link"><b>→</b> navigation</span>
+            <span class="lg-click"><b>•</b> click</span>
+            <span class="lg-cap"><b>✓</b> captured</span>
+          </div>
+        </section>
+
+        <!-- Reshape: chat over the saved extraction (Phase 2) -->
+        <section class="side-pane hidden" id="pane-reshape">
+          <div class="rs-head">
+            <div class="rs-title">Reshape</div>
+            <div class="rs-sub">Ask for tables, splits or filtered subsets of this link’s extraction.
+              Each answer is saved as a new file — crawl once, reshape many times.</div>
+          </div>
+          <div class="rs-log" id="rs-log"></div>
+          <form class="rs-input" id="rs-form">
+            <textarea id="rs-msg" rows="2" placeholder="e.g. make a table of the prices · split the menu by category · only the available days"></textarea>
+            <button class="primary" id="rs-send" type="submit">Send</button>
+          </form>
+        </section>
       </div>
-    </div>
-    <!-- reshape: chat over the saved extraction (view mode) -->
-    <div class="reshape hidden" id="run-chat">
-      <div class="rs-head">
-        <div class="rs-title">Reshape</div>
-        <div class="rs-sub">Ask for tables, splits or filtered subsets of this link’s extraction.
-          Each answer is saved as a new file — crawl once, reshape many times.</div>
-      </div>
-      <div class="rs-log" id="rs-log"></div>
-      <form class="rs-input" id="rs-form">
-        <textarea id="rs-msg" rows="2" placeholder="e.g. make a table of the prices · split the menu by category · only the available days"></textarea>
-        <button class="primary" id="rs-send" type="submit">Send</button>
-      </form>
-    </div>
+    </aside>
   </div>
 </section>
 
@@ -656,6 +683,7 @@ let runScans = [];          // ordered scans (links) shown in the current run vi
 let activeScanId = null;    // which link tab is open
 let runMode = 'view';       // 'live' | 'view'
 let crawlFinished = false;  // a live crawl has reached 'done' (reshape becomes available)
+let sideTab = 'activity';   // right panel: 'activity' | 'tree' | 'reshape'
 let provider = 'ollama';    // 'ollama' | 'openai' (any OpenAI-compatible API)
 let availableModels = [];   // [{ name, isCloud, size }] from the model probe
 let connOk = false;         // is the selected provider responding
@@ -1107,7 +1135,19 @@ function clearRun() {
   $('run-files').innerHTML = '<span class="label">files</span><span class="muted">no files yet</span>';
   $('run-viewer').innerHTML = '<div class="empty">Select a file to view its Markdown.</div>';
   $('run-bar-i').style.width = '0'; $('run-prog').textContent = ''; resetStats();
-  $('run-title').textContent = '—'; $('run-sub').textContent = '';
+  $('run-ctx').innerHTML = '';
+  $('log').innerHTML = ''; resetTree();
+}
+
+// The slim context line for the active link (replaces the old bulky subhead).
+function renderCtx(s) {
+  const el = $('run-ctx');
+  if (!s || !(s.url || s.task)) { el.innerHTML = ''; return; }
+  const link = s.url
+    ? '<span class="ctx-ico">🔗</span><a href="' + escAttr(s.url) + '" target="_blank" rel="noopener" title="' +
+      escAttr(s.url) + '">' + esc(s.url) + '</a>' : '';
+  const task = s.task ? '<span class="ctx-task" title="' + escAttr(s.task) + '">' + esc(s.task) + '</span>' : '';
+  el.innerHTML = link + task;
 }
 
 function getScan(id) { return runScans.find((s) => s.scanId === (id || '')) || null; }
@@ -1142,8 +1182,7 @@ function selectScan(id) {
   activeScanId = id || '';
   renderLinkTabs();
   const s = getScan(activeScanId);
-  $('run-title').textContent = s ? (s.title || s.url || '(link)') : '—';
-  $('run-sub').textContent = s ? [s.url, s.task].filter(Boolean).join('  ·  ') : '';
+  renderCtx(s);
   updateRunProgress(s);
   renderMain(s);
   syncSide(s);
@@ -1230,16 +1269,19 @@ async function loadFile(s, name, chip) {
 }
 
 // ---------- reshape: chat over the saved extraction (Phase 2) ----------
-// Decide which side panel the run view shows: the live activity log while a crawl
-// runs, or the reshape chat once it's finished / when viewing a saved link.
+// The run view always shows one right panel with three tabs: Activity (live or
+// replayed narration), Tree (the exploration map), and Reshape (chat over the
+// saved files). Activity + Tree stay reachable even after a crawl finishes or
+// when reopening a saved run; Reshape appears once there are files to reshape.
 function syncSide(s) {
+  $('run-side').classList.remove('hidden');
   const live = runMode === 'live' && !crawlFinished;
-  const showChat = !live && !!(s && s.files && s.files.length);
-  $('run-activity').classList.toggle('hidden', !live);
-  $('run-chat').classList.toggle('hidden', !showChat);
-  $('run-body').classList.toggle('live', live);
-  $('run-body').classList.toggle('chat', showChat);
-  if (showChat) showChatFor(s);
+  const canReshape = !!(s && s.files && s.files.length);
+  $('st-reshape').classList.toggle('hidden', !canReshape);
+  // If the active tab is no longer available, fall back sensibly.
+  let tab = sideTab;
+  if (tab === 'reshape' && !canReshape) tab = live ? 'activity' : 'tree';
+  setSideTab(tab);
 }
 
 async function showChatFor(s) {
@@ -1363,6 +1405,8 @@ function enterRunView({ live }) {
   $('stop').classList.toggle('hidden', !live);
   $('status').textContent = live ? 'running' : 'viewing';
   clearRun();
+  sideTab = 'activity';
+  $('now').innerHTML = '<span class="muted">starting…</span>';
   syncSide(null);
 }
 
@@ -1373,7 +1417,7 @@ async function openRun(id) {
   try {
     manifest = await (await fetch('/runs/' + encodeURIComponent(id))).json();
   } catch {
-    $('run-title').textContent = 'could not load run'; return;
+    $('run-viewer').innerHTML = '<div class="empty">could not load run</div>'; return;
   }
   for (const s of manifest.scans || []) {
     const sc = addScan(s);
@@ -1383,11 +1427,14 @@ async function openRun(id) {
   }
   renderLinkTabs();
   selectScan((runScans[0] || {}).scanId);
+  await loadActivity(id);
+  const first = getScan(activeScanId);
+  setSideTab(first && first.files.length ? 'reshape' : 'tree');
 }
 
 // Open a single link on its own (from the Links list). `scan` is the run.json
 // summary entry: { scanId, url, task, title, pages, files }.
-function openScan(rid, scan) {
+async function openScan(rid, scan) {
   enterRunView({ live: false });
   liveRunId = rid;
   const sc = addScan(scan);
@@ -1395,6 +1442,8 @@ function openScan(rid, scan) {
   const np = scan.pages || 0;
   sc.prog = { pct: 100, done: np, total: np, pending: 0, eta: '', label: np + ' page(s) · ' + (scan.files || []).length + ' file(s)' };
   selectScan(sc.scanId);
+  await loadActivity(rid);
+  setSideTab(sc.files.length ? 'reshape' : 'tree');
 }
 
 // ---------- live crawl ----------
@@ -1406,138 +1455,211 @@ function logLine(html, cls) {
   while ($('log').childNodes.length > 400) $('log').removeChild($('log').lastChild);
 }
 
-// ---------- live exploration graph (pages / clicks) ----------
-// Built from the same SSE stream: each navigation (follow / navigate / advance)
-// adds a VIEW node along a left-to-right chain; other clicks bump the current
-// view's click badge; an `extracted` marks the current view captured. Toggled with
-// the Activity/Graph buttons during a run.
-const graph = { nodes: [], byId: {}, cur: null, seq: 0 };
-let graphVisible = false, simRAF = 0, lastNodeAt = 0;
+// ---------- exploration Tree (pages → views → clicks), file-tree style --------
+// Built from the activity stream into a tree that mirrors CONTAINMENT, not the
+// raw click order. A view node's identity is the STATE it reaches (the engine's
+// perception fingerprint, carried on the event), NOT the button text — so the
+// same control reaching different states (next-month → July, then August) makes
+// distinct nodes, while re-reaching a state (re-clicks / overshoots) collapses
+// onto the existing one. Each click means one unique thing.
+//   site
+//   └─ page (one per crawled URL)
+//      ├─ view  (= a reached state)  ← in-page navigation: next-month / paginator
+//      │  ├─ click                      the in-place reveals (days/items) of THAT
+//      │  └─ click                      state, as unique leaves
+//      └─ view  (= another state)
+// Each page keeps its own "current view", so clicks attach to the view they
+// happened in and parallel pages (concurrency) never cross-nest.
+const tree = { roots: [], siteRoot: null, pages: new Map(), last: null, count: 0 };
+const TREE_CAP = 800; // keep it light; the full detail lives in the saved files
 
-function graphHost(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || ''; } }
+function hostLabel(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || ''; } }
+function urlKey(u) { try { return new URL(u).href; } catch { return u || ''; } }
+function pathLabel(u) { try { const x = new URL(u); return (x.pathname + x.search) || '/'; } catch { return u || ''; } }
 
-function resetGraph() {
-  graph.nodes = []; graph.byId = {}; graph.cur = null; graph.seq = 0;
-  const svg = $('graph-svg'); if (svg) svg.innerHTML = '';
-  if ($('graph-empty')) $('graph-empty').classList.remove('hidden');
-  simStop();
+function resetTree() {
+  tree.roots = []; tree.siteRoot = null; tree.pages = new Map(); tree.last = null; tree.count = 0;
+  if ($('tree')) $('tree').innerHTML = '';
+  if ($('tree-empty')) $('tree-empty').classList.remove('hidden');
 }
 
-function gAdd(kind, label, parent) {
-  // Spawn near the parent so a new node visibly "flies out" as the force layout settles.
-  const px = parent ? parent.x : 0, py = parent ? parent.y : 0;
-  const n = {
-    id: graph.seq++, kind, label: (label || '').replace(/\s+/g, ' ').trim().slice(0, 32),
-    parent: parent ? parent.id : null, clicks: 0, captured: false,
-    x: px + (Math.random() * 50 - 25), y: py + (parent ? 64 : 0) + (Math.random() * 24 - 12), vx: 0, vy: 0,
-  };
-  graph.nodes.push(n); graph.byId[n.id] = n;
-  lastNodeAt = performance.now();
-  if ($('graph-empty')) $('graph-empty').classList.add('hidden');
+function normLabel(label) { return (label || '').replace(/\s+/g, ' ').trim().slice(0, 48); }
+
+function tNode(kind, label, parent) {
+  const n = { kind, label: normLabel(label), captured: false, children: [], parent };
+  if (parent) parent.children.push(n); else tree.roots.push(n);
+  tree.count++; tree.last = n;
+  if ($('tree-empty')) $('tree-empty').classList.add('hidden');
   return n;
 }
 
-function graphOnEvent(ev) {
-  if (ev.type === 'site') graph.cur = gAdd('site', graphHost(ev.url) || ev.url, null);
-  else if (ev.type === 'page') { if (!graph.cur) graph.cur = gAdd('page', graphHost(ev.url), null); }
-  else if (ev.type === 'action') {
-    if (!graph.cur) graph.cur = gAdd('site', 'run', null);
+// A node is identified by (kind, label) within its parent — each distinct control
+// is ONE "virtual link". Re-activating the same control resolves to the same node
+// instead of duplicating it, so repeated next-month clicks stay a single view.
+function childByLabel(parent, kind, label) {
+  const want = normLabel(label);
+  for (const c of parent.children) if (c.kind === kind && c.label === want) return c;
+  return null;
+}
+
+// Clean an action detail into a human label: drop the engine's "kind:" prefix
+// and a trailing "(+N)" count. "advance: Mese successivo (+3)" -> "Mese successivo".
+function actionLabel(detail, fallback) {
+  const s = String(detail || '').replace(/^[a-z]+\s*[:\-—]\s*/i, '').replace(/\s*\(\+\d+\)\s*$/, '').trim();
+  return s || fallback || '';
+}
+
+// Resolve (or lazily create) the node for one crawled PAGE (URL). Pages hang off
+// the site root; each tracks its own current view + last node so in-page
+// navigations become siblings and concurrent pages stay independent.
+function pageFor(url) {
+  const key = urlKey(url);
+  let p = tree.pages.get(key);
+  if (p) return p;
+  if (!tree.siteRoot) tree.siteRoot = tNode('site', hostLabel(url) || url || 'run', null);
+  const node = tNode('link', pathLabel(url), tree.siteRoot);
+  p = { node, view: node, last: node, viewsByKey: new Map() };
+  tree.pages.set(key, p);
+  return p;
+}
+
+function treeOnEvent(ev) {
+  if (tree.count > TREE_CAP) return;
+  if (ev.type === 'site') {
+    const root = tNode('site', hostLabel(ev.url) || ev.url, null);
+    tree.siteRoot = root;
+    // The seed page IS the site root, so its in-page views attach directly to it.
+    tree.pages.set(urlKey(ev.url), { node: root, view: root, last: root, viewsByKey: new Map() });
+  } else if (ev.type === 'page') {
+    pageFor(ev.url); // ensure a node exists for this crawled URL
+  } else if (ev.type === 'action') {
+    const p = pageFor(ev.url);
     const d = ev.detail || '';
-    const advancing = ev.action === 'follow' || /^(navigate|advance)\b/i.test(d);
-    if (advancing) {
-      const label = d.replace(/^(navigate|advance|follow)\s*[:\-]?\s*/i, '').replace(/\s*\(\+\d+\)\s*$/, '');
-      graph.cur = gAdd('view', label || ev.action, graph.cur);
+    const navigating = ev.action === 'follow' || /^(navigate|advance)\b/i.test(d);
+    const label = actionLabel(d, ev.action);
+    let node;
+    if (navigating) {
+      // A VIEW within this page. Its identity is the STATE it reaches (the engine's
+      // fingerprint), NOT the button — so the same control reaching different states
+      // (next-month → July, then August) makes DISTINCT nodes, while re-reaching a
+      // state (re-clicks, overshoots) collapses onto its node. Fall back to the
+      // label when no state is carried (older traces / follows).
+      const key = ev.state ? 's:' + ev.state : 'l:' + normLabel(label);
+      node = p.viewsByKey.get(key);
+      if (!node) { node = tNode('link', label, p.node); p.viewsByKey.set(key, node); }
+      p.view = node;
     } else {
-      graph.cur.clicks++;
+      // An in-place click — a unique leaf under the current view (deduped by label).
+      node = childByLabel(p.view, 'click', label) || tNode('click', label, p.view);
     }
-  } else if (ev.type === 'extracted') { if (graph.cur) graph.cur.captured = true; }
-  else return;
-  if (graphVisible) simStart();
+    p.last = tree.last = node;
+  } else if (ev.type === 'extracted') {
+    const p = ev.url ? tree.pages.get(urlKey(ev.url)) : null;
+    const target = (p && p.last) || tree.last;
+    if (target) target.captured = true;
+  } else return;
+  if (sideTab === 'tree') renderTree();
 }
 
-function nodeR(n) { return n.kind === 'site' ? 14 : 9 + Math.min(7, n.clicks); }
-
-// One step of a spring–electrical (force-directed) layout: every node repels every
-// other, edges pull toward a rest length, a weak centering force keeps it framed.
-function simTick() {
-  const ns = graph.nodes;
-  if (ns.length) {
-    for (let i = 0; i < ns.length; i++) {
-      for (let j = i + 1; j < ns.length; j++) {
-        const a = ns[i], b = ns[j];
-        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
-        if (d2 < 0.01) { d2 = 0.01; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
-        const d = Math.sqrt(d2), f = 3000 / d2, ux = dx / d, uy = dy / d;
-        a.vx += ux * f; a.vy += uy * f; b.vx -= ux * f; b.vy -= uy * f;
-      }
-    }
-    for (const n of ns) {
-      if (n.parent == null) continue;
-      const p = graph.byId[n.parent];
-      let dx = n.x - p.x, dy = n.y - p.y; const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const f = (d - 82) * 0.05, ux = dx / d, uy = dy / d;
-      n.vx -= ux * f; n.vy -= uy * f; p.vx += ux * f; p.vy += uy * f;
-    }
-    for (const n of ns) {
-      n.vx += -n.x * 0.0025; n.vy += -n.y * 0.0025;
-      n.vx *= 0.85; n.vy *= 0.85; n.x += n.vx; n.y += n.vy;
-    }
-  }
-  renderGraph();
-  // Animate for a short window after the last node arrives, then FREEZE — the layout
-  // is settled, and a static frame is idle/screenshot-friendly. Live crawls keep
-  // adding nodes, so it animates continuously until the run goes quiet.
-  if (graphVisible && performance.now() - lastNodeAt < 2500) {
-    simRAF = requestAnimationFrame(simTick);
-  } else {
-    simRAF = 0;
-  }
-}
-function simStart() { if (graphVisible && !simRAF) simRAF = requestAnimationFrame(simTick); }
-function simStop() { if (simRAF) cancelAnimationFrame(simRAF); simRAF = 0; }
-
-function renderGraph() {
-  const svg = $('graph-svg'); if (!svg) return;
-  const ns = graph.nodes;
-  if (!ns.length) { svg.innerHTML = ''; svg.removeAttribute('viewBox'); return; }
-  // Auto-fit the viewBox to the current node cloud (with margin) so it stays framed.
-  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  for (const n of ns) { const r = nodeR(n) + 34; minX = Math.min(minX, n.x - r); maxX = Math.max(maxX, n.x + r); minY = Math.min(minY, n.y - r); maxY = Math.max(maxY, n.y + r); }
-  const W = Math.max(140, maxX - minX), H = Math.max(140, maxY - minY);
-  let edges = '';
-  for (const n of ns) {
-    if (n.parent == null) continue;
-    const p = graph.byId[n.parent];
-    const live = n === graph.cur ? ' g-edge-live' : '';
-    edges += `<line class="g-edge${live}" x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}"/>`;
-  }
-  let dots = '';
-  for (const n of ns) {
-    const r = nodeR(n);
-    const cls = 'g-node g-' + (n.kind === 'site' ? 'site' : 'view') + (n === graph.cur ? ' g-cur' : n.captured ? ' g-cap' : '');
-    dots += `<g transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})">` +
-      `<circle class="${cls}" r="${r}"/>` +
-      (n.clicks ? `<text class="g-clicks" y="3.5" text-anchor="middle">${n.clicks}</text>` : '') +
-      `<text class="g-label" y="${r + 12}" text-anchor="middle">${esc(n.label || n.kind)}</text>` +
-      `</g>`;
-  }
-  svg.setAttribute('viewBox', `${minX.toFixed(1)} ${minY.toFixed(1)} ${W.toFixed(1)} ${H.toFixed(1)}`);
-  svg.innerHTML = edges + dots;
+function treeRows(n, prefix, isLast, isRoot) {
+  const conn = isRoot ? '' : (isLast ? '└─ ' : '├─ ');           // └─  ├─
+  const ic = n.kind === 'site' ? '◉' : n.kind === 'link' ? '→' : '•'; // ◉ → •
+  const kc = n.kind === 'site' ? 'tw-site' : n.kind === 'link' ? 'tw-link' : 'tw-click';
+  const cur = (runMode === 'live' && !crawlFinished && n === tree.last) ? ' tw-cur' : '';
+  const cap = n.captured ? '<span class="tw-cap">✓</span>' : '';
+  let row = '<div class="tw-row' + cur + '">' +
+    '<span class="tw-guide">' + esc(prefix + conn) + '</span>' +
+    '<span class="tw-ico ' + kc + '">' + ic + '</span>' +
+    '<span class="tw-label">' + esc(n.label || n.kind) + '</span>' + cap +
+    '</div>';
+  const childPrefix = isRoot ? '' : prefix + (isLast ? '   ' : '│  ');           // "│  " / "   "
+  n.children.forEach((c, i) => { row += treeRows(c, childPrefix, i === n.children.length - 1, false); });
+  return row;
 }
 
-function setActView(graphOn) {
-  graphVisible = graphOn;
-  $('log').classList.toggle('hidden', graphOn);
-  $('run-graph').classList.toggle('hidden', !graphOn);
-  $('tab-log').classList.toggle('on', !graphOn);
-  $('tab-graph').classList.toggle('on', graphOn);
-  if (graphOn) { renderGraph(); lastNodeAt = performance.now(); simStart(); } else simStop();
+function renderTree() {
+  const host = $('tree'); if (!host) return;
+  if (!tree.roots.length) { host.innerHTML = ''; return; }
+  let html = '';
+  tree.roots.forEach((r, i) => { html += treeRows(r, '', i === tree.roots.length - 1, true); });
+  host.innerHTML = html;
+  const cur = host.querySelector('.tw-cur');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
-$('tab-log').onclick = () => setActView(false);
-$('tab-graph').onclick = () => setActView(true);
+
+// ---------- right panel: Activity / Tree / Reshape tab switching ----------
+function setSideTab(name) {
+  sideTab = name;
+  for (const t of ['activity', 'tree', 'reshape']) {
+    $('pane-' + t).classList.toggle('hidden', t !== name);
+    $('st-' + t).classList.toggle('on', t === name);
+  }
+  if (name === 'tree') renderTree();
+  if (name === 'reshape') { const s = getScan(activeScanId); if (s) showChatFor(s); }
+}
+$('st-activity').onclick = () => setSideTab('activity');
+$('st-tree').onclick = () => setSideTab('tree');
+$('st-reshape').onclick = () => setSideTab('reshape');
+
+// Rebuild the Activity log + Tree from a run's persisted timeline (finished or
+// reopened runs that aren't streaming live events).
+function replayActivity(events) {
+  $('log').innerHTML = ''; resetTree();
+  for (const ev of events || []) { treeOnEvent(ev); logEvent(ev); }
+  renderTree();
+  $('now').innerHTML = (events && events.length)
+    ? '<span class="s">done</span> reviewing a saved run'
+    : '<span class="muted">no activity was recorded for this run</span>';
+}
+
+async function loadActivity(runId) {
+  try {
+    const d = await (await fetch('/runs/' + encodeURIComponent(runId) + '/activity')).json();
+    replayActivity(d.events || []);
+  } catch { replayActivity([]); }
+}
+
+// ---------- live crawl ----------
+// One Activity-log line per event — shared by the live stream and replay.
+function logEvent(ev) {
+  switch (ev.type) {
+    case 'site':
+      logLine('▶ <b>site</b> ' + esc(ev.url));
+      break;
+    case 'strategy':
+      logLine('strategy: <b>' + esc(ev.strategy) + '</b>' + (ev.framework ? ' [' + esc(ev.framework) + ']' : ''));
+      break;
+    case 'discover':
+      logLine('discovered <b>' + ev.count + '</b> page(s)');
+      break;
+    case 'action': {
+      const a = esc(ev.action);
+      logLine('<span class="tag ' + a + '">' + a + '</span> ' + esc(ev.detail || ''));
+      break;
+    }
+    case 'extracted':
+      logLine('<span class="tag extract">captured</span> <b>' + esc(ev.title || '(untitled)') + '</b>' +
+              (ev.bytes != null ? ' · ' + ev.bytes + 'b' : ''));
+      break;
+    case 'saved':
+      logLine('<b>saved</b> — run ' + esc(ev.runId || '') + ' · ' + (ev.scans || []).length + ' link(s)' +
+              (ev.dir ? '<div class="muted">' + esc(ev.dir) + '</div>' : ''));
+      break;
+    case 'warn':
+      logLine('⚠ ' + (ev.reason ? '[' + esc(ev.reason) + '] ' : '') + esc(ev.message), 'warn');
+      break;
+    case 'error':
+      logLine('✗ ' + esc(ev.message), 'err');
+      break;
+    case 'done':
+      logLine('<b>done</b> — ' + (ev.stats ? ev.stats.pages : 0) + ' page(s)');
+      break;
+  }
+}
 
 function handle(ev) {
-  graphOnEvent(ev);
+  treeOnEvent(ev);
+  logEvent(ev);
   switch (ev.type) {
     case 'site': {
       const s = addScan({ scanId: ev.scanId, url: ev.url, task: ev.task, title: ev.title });
@@ -1545,23 +1667,11 @@ function handle(ev) {
       s.prog = { pct: s.prog.pct || 0, label: 'crawling…' };
       selectScan(s.scanId); // follow the link currently being crawled
       $('now').innerHTML = '<span class="s">site</span> ' + esc(ev.url);
-      logLine('▶ <b>site</b> ' + esc(ev.url));
       break;
     }
-    case 'strategy':
-      logLine('strategy: <b>' + esc(ev.strategy) + '</b>' + (ev.framework ? ' [' + esc(ev.framework) + ']' : ''));
-      break;
-    case 'discover':
-      logLine('discovered <b>' + ev.count + '</b> page(s)');
-      break;
     case 'page':
       $('now').innerHTML = '<span class="s">page</span> ' + esc(ev.url);
       break;
-    case 'action': {
-      const a = esc(ev.action);
-      logLine('<span class="tag ' + a + '">' + a + '</span> ' + esc(ev.detail || ''));
-      break;
-    }
     case 'extracted': {
       const s = getScan(ev.scanId) || addScan({ scanId: ev.scanId });
       const html = '<article class="ext">' +
@@ -1600,22 +1710,13 @@ function handle(ev) {
       renderLinkTabs();
       const cur = getScan(activeScanId);
       if (cur) renderMain(cur); // the active link now shows its file tabs
-      logLine('<b>saved</b> — run ' + esc(ev.runId) + ' · ' + (ev.scans || []).length + ' link(s)' +
-              (ev.dir ? '<div class="muted">' + esc(ev.dir) + '</div>' : ''));
       break;
     }
-    case 'warn':
-      logLine('⚠ ' + (ev.reason ? '[' + esc(ev.reason) + '] ' : '') + esc(ev.message), 'warn');
-      break;
-    case 'error':
-      logLine('✗ ' + esc(ev.message), 'err');
-      break;
     case 'done':
       $('status').textContent = 'done';
       $('stop').classList.add('hidden');
-      logLine('<b>done</b> — ' + (ev.stats ? ev.stats.pages : 0) + ' page(s)');
       crawlFinished = true;
-      syncSide(getScan(activeScanId)); // crawl over → offer reshape on the active link
+      syncSide(getScan(activeScanId)); // crawl over → Reshape becomes available, Activity/Tree stay
       break;
   }
 }
@@ -1637,13 +1738,8 @@ $('start').onclick = async () => {
   }
   const options = collectOptions();
 
-  // enter live run view
+  // enter live run view (clears the log + tree and resets the side panel)
   enterRunView({ live: true });
-  resetGraph();
-  $('log').innerHTML = '';
-  $('run-title').textContent = 'starting…';
-  $('run-sub').textContent = targets.map((t) => t.url).join('  ·  ');
-  $('now').innerHTML = '<span class="muted">starting…</span>';
   connect();
 
   const r = await fetch('/start', {

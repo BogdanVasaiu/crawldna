@@ -18,7 +18,6 @@
   "files": [
     "src",
     "bin",
-    "ui",
     "index.d.ts",
     "README.md",
     "LICENSE"

@@ -24,6 +24,8 @@ import {
   cacheRoot,
   getChatSession,
   readChatFile,
+  saveActivity,
+  readActivity,
 } from '../src/lib/runs.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,6 +33,31 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clients = new Set(); // active SSE responses
 let currentRun = null;
 let eventBuffer = []; // replayed to late subscribers within a run
+let activityTrace = []; // compact, persistable narration of the current run
+
+// Keep only the narrative events the Activity log + exploration Tree are built
+// from, and drop the heavy bits (e.g. extraction previews). Returns null for
+// events that don't belong in the persisted trace (progress, page, ping, …).
+function traceEvent(ev) {
+  switch (ev.type) {
+    case 'site':
+      return { type: 'site', scanId: ev.scanId, url: ev.url, task: ev.task, title: ev.title };
+    case 'strategy':
+      return { type: 'strategy', scanId: ev.scanId, strategy: ev.strategy, framework: ev.framework };
+    case 'discover':
+      return { type: 'discover', scanId: ev.scanId, count: ev.count };
+    case 'action':
+      return { type: 'action', scanId: ev.scanId, action: ev.action, detail: ev.detail, url: ev.url, state: ev.state };
+    case 'extracted':
+      return { type: 'extracted', scanId: ev.scanId, url: ev.url, title: ev.title, bytes: ev.bytes };
+    case 'warn':
+      return { type: 'warn', scanId: ev.scanId, reason: ev.reason, message: ev.message };
+    case 'error':
+      return { type: 'error', scanId: ev.scanId, message: ev.message };
+    default:
+      return null;
+  }
+}
 
 function broadcast(ev) {
   const line = `data: ${JSON.stringify(ev)}\n\n`;
@@ -89,6 +116,8 @@ async function handleStart(req, res) {
     }
   }
   eventBuffer = [];
+  activityTrace = [];
+  let savedRunId = null;
 
   const run = crawlDocs(targets, {
     ...options,
@@ -98,6 +127,17 @@ async function handleStart(req, res) {
     onEvent: (ev) => {
       eventBuffer.push(ev);
       if (eventBuffer.length > 5000) eventBuffer.shift();
+      const t = traceEvent(ev);
+      if (t) {
+        activityTrace.push(t);
+        if (activityTrace.length > 4000) activityTrace.shift();
+      }
+      if (ev.type === 'saved' && ev.runId) savedRunId = ev.runId;
+      // Persist the timeline once the run is saved so a finished/reopened run can
+      // replay its Activity + Tree (best-effort: never let this break the crawl).
+      if ((ev.type === 'saved' || ev.type === 'done') && savedRunId) {
+        saveActivity(savedRunId, activityTrace).catch(() => {});
+      }
       broadcast(ev);
     },
   });
@@ -204,6 +244,10 @@ async function handleReshape(req, res) {
   }
 }
 
+async function handleActivity(res, id) {
+  json(res, 200, await readActivity(id));
+}
+
 async function handleChatGet(res, id, scan) {
   try {
     json(res, 200, await getChatSession(id, scan));
@@ -253,7 +297,13 @@ async function handleModels(res, params) {
 async function handleIndex(res) {
   try {
     const html = await readFile(path.join(__dirname, 'index.html'));
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    // The UI is a single local file that changes whenever sagecrawl is updated;
+    // never let the browser serve a cached (stale) copy, or UI fixes silently
+    // won't appear until a hard refresh.
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store, must-revalidate',
+    });
     res.end(html);
   } catch {
     res.writeHead(500, { 'content-type': 'text/plain' });
@@ -296,6 +346,10 @@ export async function startServer({ port = 4000 } = {}) {
         }
         if (parts.length === 3 && parts[2] === 'file' && req.method === 'GET') {
           return handleRunFile(res, id, url.searchParams.get('scan') || '', url.searchParams.get('name') || '');
+        }
+        // The run's saved activity timeline (Activity log + exploration Tree).
+        if (parts.length === 3 && parts[2] === 'activity' && req.method === 'GET') {
+          return handleActivity(res, id);
         }
         // Phase 2 reshape: the scan's conversation + its derived files.
         if (parts.length === 3 && parts[2] === 'chat' && req.method === 'GET') {
