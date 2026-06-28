@@ -115,6 +115,31 @@ function deriveDocName(instruction, reply) {
   return (base.slice(0, 60) || 'answer') + '.md';
 }
 
+// How many characters of source content to send the model per turn. Large crawls
+// can exceed a model's context window; we cap and flag truncation rather than fail
+// (the full extraction always stays on disk).
+const RESHAPE_CAP = 60000;
+
+/** One-line identity for a document so the model can be told (and the user can
+ * reference) exactly which file it is: name · size · title · source URL(s). */
+function docLabel(d, i, kind) {
+  return [
+    d.filename ? `"${d.filename}"` : `${kind} ${i + 1}`,
+    d.bytes || d.bytes === 0 ? `${d.bytes} bytes` : '',
+    d.title ? `titled "${d.title}"` : '',
+    d.sources && d.sources.length ? `crawled from ${d.sources.join(' , ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Render a labelled set of documents, each under a header that states its identity. */
+function renderDocs(set, kind) {
+  return set
+    .map((d, i) => `===== ${kind} [${i + 1}] — ${docLabel(d, i, kind)} =====\n${String(d.content || '').trim()}`)
+    .join('\n\n');
+}
+
 /**
  * Rework already-extracted content to fulfil a user request, like answering from a
  * knowledge base built over the whole crawl output. This is Phase 2: it runs on
@@ -123,43 +148,85 @@ function deriveDocName(instruction, reply) {
  * (e.g. into a Markdown table); it MUST keep every kept value (name/number/price/
  * time/URL/string) EXACTLY as written and never invent or alter one.
  *
+ * Context is passed as IDENTIFIABLE DOCUMENTS, not an anonymous blob, so the model
+ * knows what it's looking at and can honour references like "the original md" or
+ * "the 4574 bytes file":
+ *   - `documents` — the ORIGINAL crawled extraction (the default thing to reshape),
+ *     each `{ filename, bytes, title?, sources?, content }`.
+ *   - `produced`  — files the user produced earlier in THIS chat (so they can
+ *     iterate on one), each `{ filename, bytes?, content }`. Clearly separated.
+ *   - `corpus`    — back-compat: a bare string becomes a single unnamed document.
+ *
  * @param {object} a
  * @param {{provider,model,baseUrl,apiKey}} a.llm
  * @param {string} a.instruction               the user's latest message
  * @param {Array<{role:string, content:string}>} [a.history]  prior turns (this session)
- * @param {string} a.corpus                     the assembled verbatim extraction
- * @returns {Promise<{ reply: string, files: Array<{ filename: string, content: string }> }>}
+ * @param {Array<object>} [a.documents]         original crawled source documents
+ * @param {Array<object>} [a.produced]          files produced earlier in this chat
+ * @param {string} [a.corpus]                   back-compat: unnamed source content
+ * @returns {Promise<{ reply: string, files: Array<{ filename, content }>, truncated: boolean }>}
  */
-export async function aiReshape({ llm, instruction, history = [], corpus }) {
-  const src = String(corpus || '');
-  if (!src.trim()) return { reply: 'There is no extracted content to work from yet.', files: [] };
+export async function aiReshape({ llm, instruction, history = [], documents = null, produced = [], corpus = '' }) {
+  let docs = Array.isArray(documents) ? documents : null;
+  if (!docs) docs = String(corpus || '').trim() ? [{ filename: '', content: String(corpus) }] : [];
+  docs = docs.filter((d) => String(d.content || '').trim());
+  if (!docs.length) return { reply: 'There is no extracted content to work from yet.', files: [], truncated: false };
+
+  // Originals first and in full priority; trim only if they exceed the cap.
+  let sourcesBlock = renderDocs(docs, 'SOURCE DOCUMENT');
+  let truncated = false;
+  if (sourcesBlock.length > RESHAPE_CAP) {
+    sourcesBlock = sourcesBlock.slice(0, RESHAPE_CAP);
+    truncated = true;
+  }
+  // Prior chat outputs as secondary context, only with whatever budget remains so
+  // they can never crowd out the originals.
+  const prod = (produced || []).filter((d) => String(d.content || '').trim());
+  let producedBlock = prod.length ? renderDocs(prod, 'FILE YOU PRODUCED EARLIER IN THIS CHAT') : '';
+  const budget = Math.max(0, RESHAPE_CAP - sourcesBlock.length);
+  if (producedBlock.length > budget) producedBlock = producedBlock.slice(0, budget);
 
   const system =
-    'You help a user reshape ALREADY-EXTRACTED website content into files, like ' +
-    'answering from a knowledge base built from that content. STRICT RULES:\n' +
-    '- Use ONLY the provided EXTRACTED CONTENT. Never invent, add, infer or alter a ' +
-    'value: keep every name, number, price, time, URL and string EXACTLY as written. ' +
-    'You may select, drop, reorder, regroup and reformat (e.g. into a Markdown table).\n' +
-    '- When you produce deliverable content, emit it as one or more FILE BLOCKS, each ' +
-    'in this EXACT format on their own lines:\n' +
+    'You help a user reshape and answer questions over ALREADY-EXTRACTED website content, ' +
+    'like a knowledge base. The content is given as one or more SOURCE DOCUMENTS — the original, ' +
+    'verbatim crawl output — each labelled with its filename and byte size. STRICT RULES:\n' +
+    '- The SOURCE DOCUMENTS are your only source of facts AND the DEFAULT thing to work on. When ' +
+    'the user says "the original", "the original md", a filename, or a size (e.g. "the 4574 bytes ' +
+    'file"), they mean the matching SOURCE DOCUMENT — operate on THAT document.\n' +
+    '- Never invent, add, infer or alter a value: keep every name, number, price, time, URL and ' +
+    'string EXACTLY as written. You may select, drop, reorder, regroup, reformat (e.g. into a ' +
+    'Markdown table) and tidy the layout — but never change the actual content or values.\n' +
+    '- "Redo/rewrite the original better without changing its content" means reproduce that WHOLE ' +
+    'document, tidied and well-structured, with every value preserved verbatim.\n' +
+    '- Files labelled "FILE YOU PRODUCED EARLIER IN THIS CHAT" are your own prior outputs; revise ' +
+    'one only when the user clearly refers to it. They are NOT the originals.\n' +
+    '- When you produce deliverable content, emit it as one or more FILE BLOCKS, each in this EXACT ' +
+    'format on their own lines:\n' +
     '===FILE: name.md===\n' +
     '<the file\'s Markdown>\n' +
     '===END===\n' +
-    'You may emit SEVERAL files (e.g. split by category or by day). Use short, ' +
-    'descriptive .md filenames. Do NOT wrap a block\'s body in a code fence.\n' +
-    '- Put any explanation OUTSIDE the file blocks and keep it brief. If the user asks a ' +
-    'SHORT factual question, answer in plain text with NO file blocks; but if your answer ' +
-    'is itself a document — a table, several sections, or a long list — put that content ' +
-    'in a FILE BLOCK rather than inline.\n' +
-    '- If the request cannot be satisfied from the content, say so plainly (no blocks).';
+    'You may emit SEVERAL files (e.g. split by category or by day). Use short, descriptive .md ' +
+    'filenames. Do NOT wrap a block\'s body in a code fence.\n' +
+    '- Only emit FILE BLOCKS when the user asks you to CREATE, RESHAPE, REDO, SPLIT, FILTER or ' +
+    'REFORMAT a deliverable (or the answer is itself inherently a document — a table, several ' +
+    'sections, a long list). A QUESTION is NOT such a request: when the user ASKS something (e.g. ' +
+    '"what street is it on?", "how many slots are free?"), answer in plain text with NO file blocks, ' +
+    'and do NOT reproduce a SOURCE DOCUMENT as a file. Put any explanation OUTSIDE the blocks, brief.\n' +
+    '- If the request cannot be satisfied from the documents, say so plainly (no blocks).';
 
   const convo = (history || [])
     .map((h) => `${h.role === 'assistant' ? 'Assistant' : 'User'}: ${h.content}`)
     .join('\n');
   const user =
-    'EXTRACTED CONTENT (verbatim crawl output — your only source):\n\n' +
-    src +
+    'SOURCE DOCUMENTS — the original crawled extraction (verbatim). By DEFAULT these are what you ' +
+    'reshape; refer to them by filename or size when the user does:\n\n' +
+    sourcesBlock +
     '\n\n' +
+    (producedBlock
+      ? 'FILES YOU PRODUCED EARLIER IN THIS CHAT (you may revise one if asked; NOT the originals):\n\n' +
+        producedBlock +
+        '\n\n'
+      : '') +
     (convo ? 'Conversation so far:\n' + convo + '\n\n' : '') +
     'User: ' +
     String(instruction || '');
@@ -176,11 +243,12 @@ export async function aiReshape({ llm, instruction, history = [], corpus }) {
         ((err && err.message) || String(err)) +
         '. Check the selected model, and (for an API provider) the base URL and API key.',
       files: [],
+      truncated,
     };
   }
   const parsed = parseReshape(ans);
   if (!parsed.reply && !parsed.files.length) {
-    return { reply: 'The model did not return a usable response. Try rephrasing, or check the model is reachable.', files: [] };
+    return { reply: 'The model did not return a usable response. Try rephrasing, or check the model is reachable.', files: [], truncated };
   }
   // "Auto" mode safety net: if the model answered with document-worthy content but
   // didn't wrap it in a FILE BLOCK, promote that content to a saved document so the
@@ -189,7 +257,7 @@ export async function aiReshape({ llm, instruction, history = [], corpus }) {
     parsed.files.push({ filename: deriveDocName(instruction, parsed.reply), content: parsed.reply });
     parsed.reply = '';
   }
-  return parsed;
+  return { ...parsed, truncated };
 }
 
 // =========================================================================

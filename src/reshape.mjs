@@ -11,6 +11,7 @@
 import {
   getRun,
   readRunFile,
+  readChatFile,
   getChatSession,
   saveChatSession,
   writeChatFile,
@@ -19,10 +20,10 @@ import { aiReshape } from './engine/decide.mjs';
 import { resolveLlm } from './lib/llm.mjs';
 import { slug } from './lib/url.mjs';
 
-// How many characters of extracted content to send the model per turn. Large
-// crawls can exceed a model's context; we cap and flag truncation rather than
-// fail. (The full extraction always stays on disk.)
-const CORPUS_CAP = 60000;
+// How many of the user's own prior chat outputs to surface back as context, so a
+// follow-up like "redo the table you made" can reference them without flooding
+// the prompt as the conversation grows.
+const PRODUCED_CONTEXT = 6;
 
 function stripFrontMatter(md) {
   const m = String(md || '').match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -77,24 +78,45 @@ export async function reshape({ runId, scanId = '', message, model, provider, ho
   if (!scan) throw new Error('scan not found');
   const sid = String(scan.scanId || '');
 
-  // Assemble the scan's verbatim corpus from its crawl files (front-matter dropped).
-  const parts = [];
+  // The scan's ORIGINAL crawled files, each as an IDENTIFIABLE document (filename
+  // + on-disk size + source URLs). Passing identity — not an anonymous blob — is
+  // what lets the model honour references like "the original md" / "the 4574b
+  // file" and treat these as the default thing to reshape.
+  const documents = [];
   for (const f of scan.files || []) {
     try {
-      parts.push(stripFrontMatter(await readRunFile(runId, sid, f.filename, opts)));
+      const raw = await readRunFile(runId, sid, f.filename, opts);
+      documents.push({
+        filename: f.filename,
+        title: f.title || '',
+        bytes: typeof f.bytes === 'number' ? f.bytes : Buffer.byteLength(raw, 'utf8'),
+        sources: Array.isArray(f.pages) && f.pages.length ? f.pages : scan.url ? [scan.url] : [],
+        content: stripFrontMatter(raw),
+      });
     } catch {
       /* skip an unreadable file rather than fail the whole turn */
     }
   }
-  let corpus = parts.join('\n\n').trim();
-  if (!corpus) throw new Error('no extracted content for this link');
-  const truncated = corpus.length > CORPUS_CAP;
-  if (truncated) corpus = corpus.slice(0, CORPUS_CAP);
+  if (!documents.some((d) => d.content.trim())) throw new Error('no extracted content for this link');
 
   const session = await getChatSession(runId, sid, opts);
-  const { reply, files } = await aiReshape({
+
+  // The user's own prior outputs from THIS chat, as clearly-separate context so a
+  // follow-up can revise one ("redo the table you made") — never confused with
+  // the originals.
+  const produced = [];
+  for (const f of (session.files || []).slice(-PRODUCED_CONTEXT)) {
+    try {
+      produced.push({ filename: f.filename, bytes: f.bytes, content: stripFrontMatter(await readChatFile(runId, sid, f.filename, opts)) });
+    } catch {
+      /* a derived file may have been removed — skip it */
+    }
+  }
+
+  const { reply, files, truncated } = await aiReshape({
     llm,
-    corpus,
+    documents,
+    produced,
     instruction: message,
     history: (session.messages || []).map((m) => ({ role: m.role, content: m.content })),
   });
