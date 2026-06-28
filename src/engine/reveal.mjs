@@ -46,6 +46,12 @@ export async function revealAll(page, ctx, url, task) {
   // Bound how many times a single view-advancing control may re-apply, so a
   // bidirectional paginator (prev/next) can't loop forever within the budget.
   const ADV_CAP = Math.max(12, maxActions);
+  // Bound the TARGETED WALK: how many times the AI-planned direction control may be
+  // clicked toward a target before giving up. Without this, a mis-planned direction
+  // (a control whose target marker never appears — e.g. a modal-opener) re-clicks
+  // forever and eats the whole action budget. Kept well below maxActions so a single
+  // control can never monopolise the crawl.
+  const NAV_CAP = Math.max(12, Math.ceil(maxActions / 3));
 
   // Capture only the VISIBLE DOM of the current state. Interactive apps pre-render
   // many hidden panels (modals, on-screen keyboards, loading/success placeholders);
@@ -153,6 +159,8 @@ export async function revealAll(page, ctx, url, task) {
   let hitCap = false;
   let scrolledOut = false;
   let navStopped = false; // reached the target (or can't advance) — stop walking
+  let navUses = 0; // times the targeted-walk direction control has been applied
+  let navStall = 0; // consecutive targeted-walk clicks that made no progress
 
   while (!ctx.shouldStop()) {
     if (actions >= maxActions) {
@@ -330,6 +338,65 @@ export async function revealAll(page, ctx, url, task) {
       // IN-PLACE reveal (tab/accordion/expander/slot panel): a leaf, done once.
       doneLeaf.add(next.signature);
       if (newState) visited.add(after.fingerprint);
+      // STICKY-SELECTION RESTORE. Some views make a pick "stick": selecting one item
+      // changes the view's state and then the SIBLINGS stop responding until the view
+      // is re-rendered (this calendar — once day 2's slots open, clicking day 3/6/7…
+      // does nothing, so only day 2 would ever be captured). When a click both reveals
+      // content AND moves the state, and its group still has un-clicked members,
+      // restore the base view so the next sibling is selected on a fresh render; the
+      // loop re-navigates back and takes it. The group test masks digits, so it only
+      // fires for NUMBERED groups (calendar days, "Page 1/2/3", numbered items) that
+      // are prone to this — tabs/accordions with distinct names share no pattern and
+      // are left fast and reload-free.
+      const groupKey = (r) => `${r.role}|${r.kind}|${String(r.label || '').replace(/\d+/g, '#')}`;
+      const want = groupKey(next);
+      const groupHasMore = perception.revealers.some(
+        (r) => r.signature !== next.signature && decided.get(r.signature) && !doneLeaf.has(r.signature) && groupKey(r) === want,
+      );
+      if (added && after.fingerprint !== fp && groupHasMore) {
+        await restoreBase();
+        scrolledOut = false;
+      }
+    }
+
+    // SIBLING SWEEP — a control that revealed content proves its whole repeated
+    // GROUP is content: a calendar's days, a list of expanders, "Page 1 / 2 / 3"…
+    // The AI triage typically approves only a few representative items of such a
+    // group, so the rest are never captured. Read the group from the PRE-click
+    // perception (a branch's click REPLACES the group with the revealed view, so it
+    // is gone from `after`) and auto-approve every same-pattern sibling (same
+    // role+kind, label identical once its digits are masked). The loop then sweeps
+    // the ENTIRE group — works for in-place reveals AND wizard branches (each click
+    // restores, then the next approved sibling is taken). A general DOM/label-shape
+    // signal, no per-site rules; gated on real content and bounded by maxActions.
+    if (added) {
+      const groupKey = (r) => `${r.role}|${r.kind}|${String(r.label || '').replace(/\d+/g, '#')}`;
+      const want = groupKey(next);
+      for (const r of perception.revealers) {
+        if (groupKey(r) === want && !decided.get(r.signature)) decided.set(r.signature, true);
+      }
+    }
+
+    // Terminate the TARGETED WALK so the planned direction control can't be clicked
+    // forever. A real walk makes progress every step (each next-month is a NEW state),
+    // so progress resets the stall; a mis-planned direction that just re-opens the
+    // same view (or never reaches its target) makes no progress and is stopped fast,
+    // and NAV_CAP is a hard backstop regardless. This is what kept "Apri servizi" from
+    // burning all 60 actions on the booking page.
+    if (aiNav && navPlan && next.signature === navPlan.directionSig) {
+      navUses++;
+      navStall = newState || added ? 0 : navStall + 1;
+      if (navUses >= NAV_CAP || navStall >= 2) navStopped = true;
+    } else if (added) {
+      // A productive non-navigation click (e.g. a calendar day's slots captured):
+      // the reveal is still bearing fruit, so reset the targeted walk's give-up
+      // counters. Some views bounce you off the grid when you pick an item (the day
+      // grid is swapped for that day's slots), forcing a re-navigation back to it;
+      // that return revisits a SEEN state and must NOT be mistaken for a stall, or
+      // the sweep abandons the remaining items (days 8,9,10 …). The runaway guard
+      // still fires when navigation yields neither new state nor new content.
+      navStall = 0;
+      navUses = 0;
     }
 
     ctx.emit({
@@ -337,6 +404,11 @@ export async function revealAll(page, ctx, url, task) {
       url,
       action: next.kind === 'tab' ? 'click' : next.kind === 'expander' ? 'expand' : 'click',
       detail: `${aiNav ? 'navigate' : kind === 'advance' ? 'advance' : next.kind}: ${next.label || '(unlabelled)'}${added ? ` (+${added})` : ''}`,
+      // The STATE this action lands on (perception fingerprint). The UI keys
+      // view nodes by this, so the same control reaching different states
+      // (next-page → p1, p2 …; next-month → July, August) yields distinct nodes,
+      // while re-reaching a state collapses onto its existing node.
+      state: after.fingerprint,
     });
   }
 
