@@ -34,6 +34,19 @@ function parseJson(text) {
   }
 }
 
+// JSON shapes the crawl-judgment calls must return. Passed to the transport for
+// CONSTRAINED DECODING (Ollama `format`) / guaranteed JSON (OpenAI `response_format`),
+// so the model can't emit fences, prose or a wrong shape — the #1 cause of a parse
+// failure (which would force the completeness-bias "follow/keep ALL" fallback and waste
+// the crawl). Per-call downstream validation is unchanged (it stays the safety net).
+const SCHEMAS = {
+  reveal: { type: 'object', properties: { click: { type: 'array', items: { type: 'integer' } } }, required: ['click'], additionalProperties: false },
+  links: { type: 'object', properties: { follow: { type: 'array', items: { type: 'integer' } } }, required: ['follow'], additionalProperties: false },
+  keep: { type: 'object', properties: { keep: { type: 'array', items: { type: 'integer' } } }, required: ['keep'], additionalProperties: false },
+  relevant: { type: 'object', properties: { relevant: { type: 'boolean' } }, required: ['relevant'], additionalProperties: false },
+  plan: { type: 'object', properties: { direction: { type: ['integer', 'null'] }, target: { type: ['string', 'null'] } }, required: ['direction', 'target'], additionalProperties: false },
+};
+
 /** Split markdown into heading-delimited sections (verbatim text preserved). */
 function sectionize(markdown) {
   const lines = markdown.split('\n');
@@ -282,6 +295,7 @@ export async function aiScopeContent({ llm, task, title, markdown }) {
       'You decide whether a web page is relevant to a user extraction task. Answer with JSON only.',
       `Task: "${task}"\nPage title: ${title || ''}\n\nContent (truncated):\n${markdown.slice(0, 2500)}\n\n` +
         'Reply with {"relevant": true|false}. Relevant means the page contains content the task asks for.',
+      SCHEMAS.relevant,
     ).catch(() => '');
     const j = parseJson(ans);
     // Drop the page ONLY when it is both judged irrelevant AND thin. A substantial
@@ -306,6 +320,7 @@ export async function aiScopeContent({ llm, task, title, markdown }) {
       'When unsure, KEEP. Answer with JSON only.',
     `Task: "${task}"\nPage title: ${title || ''}\n\nSections (index: heading — preview):\n${outline}\n\n` +
       'Reply with {"keep": [list of section indexes to keep]}.',
+    SCHEMAS.keep,
   ).catch(() => '');
 
   const j = parseJson(ans);
@@ -349,6 +364,7 @@ export async function aiSelectLinks({ llm, task, links }) {
       'Judge by the label and the whole destination string. Answer with JSON only.',
     `Task: "${task}"\n\nDestinations (index: label — href):\n${list}\n\n` +
       'Reply with {"follow": [indexes to follow]}. Include every real, on-task page; exclude same-page anchors and off-task links.',
+    SCHEMAS.links,
   ).catch(() => '');
 
   const j = parseJson(ans);
@@ -408,6 +424,7 @@ export async function aiPlanNavigation({ llm, task, current = {}, controls = [] 
       `Current view (title + visible text):\n${(current.title || '').slice(0, 100)}\n${(current.snippet || '').replace(/\s+/g, ' ').slice(0, 700)}\n\n` +
       `Controls on the page (index: [kind] "label"):\n${lines}\n\n` +
       'Reply with {"direction": <index or null>, "target": "<text that marks the target view, or null>"}.',
+    SCHEMAS.plan,
   ).catch(() => '');
 
   const j = parseJson(ans);
@@ -465,6 +482,7 @@ export async function aiSelectRevealers({ llm, task, candidates }) {
     `Task (for context only — reveal everything regardless): "${task || ''}"\n\n` +
       `Controls (index: [kind] "label" .class — context):\n${lines}\n\n` +
       'Reply with {"click":[indexes of controls that reveal hidden content]}.',
+    SCHEMAS.reveal,
   ).catch(() => '');
 
   const j = parseJson(ans);

@@ -21,6 +21,81 @@ const PROVIDERS = new Set(['ollama', 'openai']);
 const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
 const REQUEST_TIMEOUT_MS = 120000;
 
+// --- LLM call throttle (provider-aware) ------------------------------------
+// A LOCAL model (Ollama) is a single process that answers ~one prompt at a time,
+// so firing the crawl's parallel pages' judgment calls at it ALL AT ONCE only
+// thrashes it: each call gets slower, and Stop drags because in-flight calls must
+// drain. So we cap CONCURRENT calls PER PROVIDER — tight for local, generous for a
+// remote API (OpenAI/DeepSeek/OpenRouter/… scale horizontally, so parallelism there
+// is a clear win). The browser still renders pages in parallel; only the model
+// calls are metered.
+const PROVIDER_CONCURRENCY = { ollama: 2, openai: 16 };
+
+function createLimiter(max) {
+  let active = 0;
+  const waiters = [];
+  const pump = () => {
+    while (active < max && waiters.length) {
+      active++;
+      const { fn, resolve, reject } = waiters.shift();
+      Promise.resolve()
+        .then(fn)
+        .then(resolve, reject)
+        .finally(() => {
+          active--;
+          pump();
+        });
+    }
+  };
+  return {
+    run(fn) {
+      return new Promise((resolve, reject) => {
+        waiters.push({ fn, resolve, reject });
+        pump();
+      });
+    },
+    // Drop everything still QUEUED (not yet started) so a stopped crawl doesn't
+    // keep handing work to the model. Callers in decide.mjs `.catch()` and bias to
+    // keep/follow, so a cancelled judgment never loses content.
+    clear() {
+      const pending = waiters.splice(0);
+      for (const w of pending) w.reject(new Error('LLM call cancelled (crawl stopped)'));
+    },
+  };
+}
+
+const _limiters = new Map();
+function limiterFor(provider) {
+  let l = _limiters.get(provider);
+  if (!l) {
+    l = createLimiter(PROVIDER_CONCURRENCY[provider] || 8);
+    _limiters.set(provider, l);
+  }
+  return l;
+}
+
+/** Cancel all QUEUED (not-yet-started) LLM calls — called by run.stop() so a stop
+ *  is near-instant instead of waiting for a backlog of judgment calls to run. */
+export function abortPendingLlm() {
+  for (const l of _limiters.values()) l.clear();
+}
+
+/** Rough token estimate (≈4 chars/token) — only a FALLBACK for when a backend
+ *  doesn't report real counts; real numbers from the provider are preferred. */
+function estimateTokens(s) {
+  return Math.ceil(String(s || '').length / 4);
+}
+
+/** Reject a promise if it outruns `ms`, so a hung model call can't stall a crawl
+ *  (or its Stop) indefinitely. The Ollama client has no per-call timeout of its own. */
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 /** Strip a trailing slash; treat empty as empty. */
 function trimUrl(raw) {
   return String(raw || '').trim().replace(/\/+$/, '');
@@ -92,8 +167,8 @@ function ollamaClient(host) {
   return c;
 }
 
-async function ollamaChat(llm, system, user) {
-  const res = await ollamaClient(llm.baseUrl).chat({
+async function ollamaChat(llm, system, user, schema) {
+  const req = {
     model: llm.model,
     messages: [
       { role: 'system', content: system },
@@ -101,36 +176,73 @@ async function ollamaChat(llm, system, user) {
     ],
     stream: false,
     options: { temperature: 0 },
-  });
-  return res?.message?.content || '';
+  };
+  // Constrained decoding: force the model to emit EXACTLY this JSON shape (Ollama uses
+  // XGrammar). Removes the #1 cause of parse failures (code fences, preambles, partial
+  // or wrong-shaped JSON) and is markedly faster — no tokens spent on formatting. Only
+  // when a schema is expected; free-form calls (reshape, the health ping) pass none.
+  if (schema) req.format = schema;
+  const res = await withTimeout(
+    ollamaClient(llm.baseUrl).chat(req),
+    REQUEST_TIMEOUT_MS,
+    'Ollama request',
+  );
+  const content = res?.message?.content || '';
+  // Ollama reports real token counts (prompt_eval_count / eval_count); fall back to
+  // an estimate only if a build doesn't.
+  const usage = {
+    inputTokens: res?.prompt_eval_count ?? estimateTokens(system + user),
+    outputTokens: res?.eval_count ?? estimateTokens(content),
+  };
+  return { content, usage };
 }
 
 // --- OpenAI-compatible backend (raw fetch, zero new deps) -------------------
-async function openaiChat(llm, system, user) {
+async function openaiChat(llm, system, user, schema) {
   if (!llm.baseUrl) throw new Error('no API base URL set');
-  const r = await fetch(joinUrl(llm.baseUrl, 'chat/completions'), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(llm.apiKey ? { authorization: 'Bearer ' + llm.apiKey } : {}),
-    },
-    body: JSON.stringify({
-      model: llm.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      temperature: 0,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  const headers = {
+    'content-type': 'application/json',
+    ...(llm.apiKey ? { authorization: 'Bearer ' + llm.apiKey } : {}),
+  };
+  const base = {
+    model: llm.model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    temperature: 0,
+    stream: false,
+  };
+  // When the caller expects JSON, ask for guaranteed-valid JSON via `json_object`: it
+  // kills the code fences / preambles that break parsing, and is broadly supported
+  // (OpenAI, DeepSeek, Groq, vLLM, LM Studio…). The prompts already contain the word
+  // "JSON" (OpenAI requires it for this mode). If a provider REJECTS response_format, we
+  // retry once WITHOUT it — a crawl must never break on an endpoint lacking the feature.
+  const send = (useFormat) =>
+    fetch(joinUrl(llm.baseUrl, 'chat/completions'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(useFormat ? { ...base, response_format: { type: 'json_object' } } : base),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+
+  let r = await send(!!schema);
+  if (!r.ok && schema && [400, 404, 415, 422, 501].includes(r.status)) {
+    r = await send(false); // provider doesn't support response_format — degrade, don't fail
+  }
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`LLM HTTP ${r.status}${body ? ': ' + body.slice(0, 200) : ''}`);
   }
   const d = await r.json().catch(() => null);
-  return d?.choices?.[0]?.message?.content || '';
+  const content = d?.choices?.[0]?.message?.content || '';
+  // OpenAI-compatible APIs return token usage; estimate only if absent.
+  const u = d?.usage || {};
+  const usage = {
+    inputTokens: u.prompt_tokens ?? estimateTokens(system + user),
+    outputTokens: u.completion_tokens ?? estimateTokens(content),
+  };
+  return { content, usage };
 }
 
 /**
@@ -140,13 +252,28 @@ async function openaiChat(llm, system, user) {
  * reshape surfaces the message to the user.
  *
  * @param {{provider:string, model:string, baseUrl:string, apiKey:string}} llm
+ * @param {object} [schema]  optional JSON schema → constrained/guaranteed JSON output
  * @returns {Promise<string>}
  */
-export async function chat(llm, system, user) {
+export async function chat(llm, system, user, schema = null) {
   if (!llm || !llm.model) throw new Error('no model selected');
-  return llm.provider === 'openai'
-    ? openaiChat(llm, system, user)
-    : ollamaChat(llm, system, user);
+  const provider = llm.provider === 'openai' ? 'openai' : 'ollama';
+  // Meter concurrent calls per provider (tight for local, generous for remote).
+  return limiterFor(provider).run(async () => {
+    const { content, usage } = provider === 'openai'
+      ? await openaiChat(llm, system, user, schema)
+      : await ollamaChat(llm, system, user, schema);
+    // Report token usage to an optional sink on the descriptor (set by the crawl)
+    // so cost can be approximated. Metering must never break the actual call.
+    if (typeof llm.__onUsage === 'function') {
+      try {
+        llm.__onUsage({ provider, inputTokens: usage.inputTokens || 0, outputTokens: usage.outputTokens || 0 });
+      } catch {
+        /* ignore */
+      }
+    }
+    return content;
+  });
 }
 
 /**

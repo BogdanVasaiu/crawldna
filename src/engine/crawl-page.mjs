@@ -11,6 +11,7 @@ import { revealAll } from './reveal.mjs';
 import { aiScopeContent, aiSelectLinks } from './decide.mjs';
 import { isDocsTask } from '../lib/task.mjs';
 import { normalizeUrl, inScope, resolveUrl } from '../lib/url.mjs';
+import { taskTerms, scoreLink } from '../lib/relevance.mjs';
 
 const now = () => new Date().toISOString();
 const bytesOf = (s) => Buffer.byteLength(s || '', 'utf8');
@@ -26,6 +27,15 @@ async function decideFollow(ctx, task, candidateObjs) {
   const cacheHost = ctx.currentScan || ctx;
   if (!cacheHost._followCache) cacheHost._followCache = new Map();
   const cache = cacheHost._followCache;
+  // Task topic terms, computed once per scan (the task is fixed for a scan).
+  if (!cacheHost._taskTerms) cacheHost._taskTerms = taskTerms(task);
+  const terms = cacheHost._taskTerms;
+
+  // Universal, task-driven relevance score per candidate (URL + label). Used to crawl
+  // the most on-task links FIRST, and — only when asked — to prune clearly off-task ones
+  // before the model. No per-site/URL-shape rule is involved; the task is the query.
+  const scoreOf = new Map();
+  for (const c of candidateObjs) scoreOf.set(c.href, scoreLink(terms, c).score);
 
   const keep = [];
   const unknown = [];
@@ -37,20 +47,43 @@ async function decideFollow(ctx, task, candidateObjs) {
     }
   }
 
-  if (unknown.length) {
+  // FOCUSED MODE (opt-in via `minRelevance` > 0): drop clearly off-task links before the
+  // model ever sees them — but ONLY when the task actually discriminates among THIS
+  // page's links (at least one reaches the threshold), so a generic task can never nuke
+  // everything. DEFAULT is minRelevance = 0 → prune nothing: precision/completeness
+  // first; scoring then only reorders, never drops.
+  const minRel = Number(ctx.options.minRelevance) || 0;
+  let toJudge = unknown;
+  if (minRel > 0 && terms.length && unknown.some((c) => scoreOf.get(c.href) >= minRel)) {
+    toJudge = [];
+    for (const c of unknown) {
+      if (scoreOf.get(c.href) >= minRel) toJudge.push(c);
+      else cache.set(c.href, false); // pruned as off-task; not re-judged this scan
+    }
+  }
+
+  if (toJudge.length) {
+    // Rank by relevance so that if aiSelectLinks caps the list (it slices to 160), the
+    // MOST on-task links are the ones actually judged — a relevant page is never lost to
+    // an arbitrary cap. Safe in default mode too (pure reordering of the model input).
+    const ranked = [...toJudge].sort((a, b) => scoreOf.get(b.href) - scoreOf.get(a.href));
     let chosen;
     try {
-      chosen = await aiSelectLinks({ llm: ctx.options.llm, task, links: unknown });
+      chosen = await aiSelectLinks({ llm: ctx.options.llm, task, links: ranked });
     } catch {
-      chosen = unknown.map((c) => c.href); // completeness bias on failure
+      chosen = ranked.map((c) => c.href); // completeness bias on failure
     }
     const chosenSet = new Set(chosen);
-    for (const c of unknown) {
+    for (const c of toJudge) {
       const follow = chosenSet.has(c.href);
       cache.set(c.href, follow);
       if (follow) keep.push(c.href);
     }
   }
+
+  // Best-first: hand the frontier this page's chosen links most-on-task FIRST, so an
+  // early Stop (or a maxPages cap) keeps what the task cares about most.
+  keep.sort((a, b) => (scoreOf.get(b) || 0) - (scoreOf.get(a) || 0));
   return keep;
 }
 

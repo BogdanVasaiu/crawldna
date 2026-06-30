@@ -16,7 +16,7 @@ import { saveRun, scanIdFor } from './lib/runs.mjs';
 import { closeBrowser } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf } from './lib/url.mjs';
 import { isDocsTask } from './lib/task.mjs';
-import { resolveLlm, checkModel } from './lib/llm.mjs';
+import { resolveLlm, checkModel, abortPendingLlm } from './lib/llm.mjs';
 
 export const DEFAULT_OPTIONS = {
   task: 'Extract the complete documentation.',
@@ -36,6 +36,11 @@ export const DEFAULT_OPTIONS = {
   // many tabs) need the headroom. Disabled controls are skipped so it isn't wasted.
   include: undefined,
   exclude: undefined,
+  minRelevance: 0, // FOCUSED MODE (0 = off, precision-first default). When > 0 (0..1),
+  // links whose task-relevance score is below this are pruned BEFORE the AI gate — a
+  // universal, task-driven way to keep the crawl on-topic without per-site rules. Only
+  // applies when the task discriminates among a page's links, so a generic task is never
+  // over-pruned. Trades some recall for speed/scope, so it stays opt-in. See lib/relevance.mjs.
   // Persistence is OPT-IN. As a library, sagecrawl writes NOTHING by default: the full
   // result (scans[].files[].markdown) is returned in memory for the caller to save
   // wherever they like. A run is written to the cache ONLY when the caller opts in —
@@ -110,6 +115,7 @@ export function crawlDocs(targets, options = {}) {
   opts.concurrency = Math.max(1, Number(opts.concurrency) || 1);
   opts.maxPages = Math.max(0, Number(opts.maxPages) || 0);
   opts.maxActions = Math.max(1, Number(opts.maxActions) || 1);
+  opts.minRelevance = Math.min(1, Math.max(0, Number(opts.minRelevance) || 0));
   // Resolve the model provider once; the engine reads ctx.options.llm and stays
   // provider-agnostic (Ollama or any OpenAI-compatible API).
   opts.llm = resolveLlm(opts);
@@ -127,6 +133,9 @@ export function crawlDocs(targets, options = {}) {
   // its own output files. A run is just the container recording which scans were
   // crawled together (the user can later open one link or the whole run).
   const emptyCounts = () => ({ 'docs:llms-full': 0, 'docs:sitemap': 0, 'docs:framework': 0, agent: 0 });
+  // AI usage meter — input/output token totals so a run's API cost can be
+  // approximated after the fact (input and output are billed differently).
+  const emptyTokens = () => ({ calls: 0, inputTokens: 0, outputTokens: 0 });
   const scans = list.map((t, i) => ({
     scanId: scanIdFor(t.url, i),
     index: i,
@@ -135,7 +144,7 @@ export function crawlDocs(targets, options = {}) {
     title: hostOf(t.url) || t.url,
     pages: [],
     files: [],
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts() },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens() },
     warnings: [],
     _hashes: new Set(), // de-dupe pages with identical content, PER scan
     _startedAt: 0,
@@ -143,7 +152,7 @@ export function crawlDocs(targets, options = {}) {
 
   const result = {
     scans,
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts() },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens() },
     warnings: [],
     run: null, // { id, dir, scans } once the run is saved to the cache
   };
@@ -202,7 +211,7 @@ export function crawlDocs(targets, options = {}) {
     // work attempted, whether or not it produced a kept page.
     markProcessed() {
       ctx.progress.done += 1;
-      emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total });
+      emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total, tokens: { ...result.stats.tokens } });
     },
     addPage(page) {
       const scan = ctx.currentScan;
@@ -236,6 +245,20 @@ export function crawlDocs(targets, options = {}) {
     // Passed to the docs profile so it can drive (or fall back to) the general
     // engine — optionally seeded with a known page set — without a circular import.
     runEngine: (target, opts) => runGeneralCrawl(target, ctx, opts),
+    tokens: result.stats.tokens, // run-level alias, surfaced on progress events
+  };
+
+  // Sink every model call's token usage into the run total and the active scan, so
+  // the saved run records how much AI it cost (the engine/profiles stay unaware).
+  opts.llm.__onUsage = ({ inputTokens = 0, outputTokens = 0 } = {}) => {
+    const bump = (t) => {
+      if (!t) return;
+      t.calls += 1;
+      t.inputTokens += inputTokens;
+      t.outputTokens += outputTokens;
+    };
+    bump(result.stats.tokens);
+    if (ctx.currentScan) bump(ctx.currentScan.stats.tokens);
   };
 
   (async () => {
@@ -321,6 +344,7 @@ export function crawlDocs(targets, options = {}) {
             scans,
             durationMs: result.stats.durationMs,
             warnings: result.warnings,
+            tokens: result.stats.tokens,
           });
           result.run = { id: saved.id, dir: saved.dir, scans: saved.summary.scans };
           emit({ type: 'saved', runId: saved.id, dir: saved.dir, scans: saved.summary.scans });
@@ -345,6 +369,10 @@ export function crawlDocs(targets, options = {}) {
     },
     stop() {
       stopped = true;
+      // Drop the queued judgment-call backlog so Stop is near-instant instead of
+      // waiting for a slow local model to chew through it (only ≤N in-flight calls
+      // remain, each bounded by the request timeout).
+      abortPendingLlm();
     },
   };
 }
@@ -471,7 +499,7 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
         // total and the bar hits 100% exactly when the frontier drains.
         ctx.progress.done += 1;
         ctx.progress.total = ctx.progress.done + queue.length + active;
-        ctx.emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total });
+        ctx.emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total, tokens: { ...ctx.tokens } });
       }
     }
   }

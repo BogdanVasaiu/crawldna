@@ -39,6 +39,20 @@ export async function revealAll(page, ctx, url, task) {
   const acc = new BlockAccumulator();
   const navLinks = new Set();
   const decided = new Map(); // signature -> boolean: does this control hide content?
+
+  // Per-SCAN reveal-verdict cache (survives ACROSS pages, unlike `decided` which is
+  // per-page). A docs site repeats the same tabs/accordions/expanders on every page;
+  // without this the AI re-judges them on all N pages. This is the link-gate cache
+  // idea (decideFollow's _followCache) applied to reveal — the single biggest crawl
+  // token saving. Keyed by the control's stable HUMAN identity (role|label|kind),
+  // which is the same across pages (it excludes the per-page DOM id and the often
+  // auto-generated aria-controls that the full traversal `signature` carries).
+  const revealHost = ctx.currentScan || ctx;
+  const revealCache = revealHost._revealCache || (revealHost._revealCache = new Map());
+  // Unlabelled controls get NO cross-page key (judged per page) so distinct generic
+  // controls are never collapsed onto one shared verdict.
+  const revealKey = (c) => (c.label && c.label.trim().length >= 2 ? `${c.role}|${c.label.trim()}|${c.kind}` : null);
+
   const doneLeaf = new Set(); // signatures of leaf/in-place controls already clicked
   const advancing = new Map(); // signature -> { appliedFrom: Set<fp>, uses: number }
   const visited = new Set(); // state fingerprints already captured (cycle guard)
@@ -105,15 +119,32 @@ export async function revealAll(page, ctx, url, task) {
   // appear AFTER a reveal are triaged in the next loop pass (a few batched calls
   // per page, never a per-click model loop).
   const triage = async (candidates) => {
-    const undecided = candidates.filter((c) => !decided.has(c.signature)).slice(0, 100);
+    // First resolve from the cross-page cache (no model call), and collect only the
+    // genuinely-new controls for the AI. On the 2nd+ page of a uniform docs site this
+    // empties the list, so most pages cost ZERO reveal-triage tokens.
+    const undecided = [];
+    for (const c of candidates) {
+      if (decided.has(c.signature)) continue;
+      const key = revealKey(c);
+      if (key && revealCache.has(key)) decided.set(c.signature, revealCache.get(key));
+      else undecided.push(c);
+    }
     if (!undecided.length) return;
+    const batch = undecided.slice(0, 100);
     let chosen = null;
     try {
-      chosen = await aiSelectRevealers({ llm: ctx.options.llm, task, candidates: undecided });
+      chosen = await aiSelectRevealers({ llm: ctx.options.llm, task, candidates: batch });
     } catch {
       chosen = null;
     }
-    for (const c of undecided) decided.set(c.signature, chosen ? chosen.has(c.signature) : !!c.heuristic);
+    for (const c of batch) {
+      const verdict = chosen ? chosen.has(c.signature) : !!c.heuristic;
+      decided.set(c.signature, verdict);
+      // Persist only a MODEL verdict (not the page-local heuristic fallback) and only
+      // for labelled controls, so the cache carries real cross-page judgments.
+      const key = revealKey(c);
+      if (key && chosen) revealCache.set(key, verdict);
+    }
   };
 
   // Dismiss cookie/consent overlays once so they don't block content.

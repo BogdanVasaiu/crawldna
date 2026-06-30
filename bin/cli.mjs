@@ -60,6 +60,7 @@ Options:
   --max-actions <n>      per-page engine action cap (default: ${DEFAULT_OPTIONS.maxActions})
   --include <regex>      only crawl URLs matching
   --exclude <regex>      skip URLs matching
+  --min-relevance <0-1>  focus on task: skip links below this task-relevance (default: ${DEFAULT_OPTIONS.minRelevance} = off)
   --ollama-host <url>    Ollama server URL (default: http://127.0.0.1:11434)
   --cache-dir <dir>      override the runs-cache location
   --port <n>             port for \`serve\` (default: 4000)
@@ -94,6 +95,7 @@ const OPTION_CONFIG = {
   'max-actions': { type: 'string' },
   include: { type: 'string' },
   exclude: { type: 'string' },
+  'min-relevance': { type: 'string' },
   'ollama-host': { type: 'string' },
   'cache-dir': { type: 'string' },
   port: { type: 'string' },
@@ -141,6 +143,7 @@ function optionsFromFlags(values) {
   if (values['max-actions'] != null) o.maxActions = Number(values['max-actions']);
   if (values.include) o.include = values.include;
   if (values.exclude) o.exclude = values.exclude;
+  if (values['min-relevance'] != null) o.minRelevance = Number(values['min-relevance']);
   if (values['ollama-host']) o.ollamaHost = values['ollama-host'];
   if (values['cache-dir']) o.cacheDir = values['cache-dir'];
   if (values.task && values.task.length === 1) o.task = values.task[0];

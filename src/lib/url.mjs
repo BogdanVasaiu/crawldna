@@ -14,11 +14,14 @@ export function toRegExp(pattern) {
 /**
  * Normalise a URL for dedup/comparison:
  * - resolve against `base` when relative
- * - KEEP the fragment as-is. We make NO assumptions about URL shape: for some
- *   sites the fragment is the page (hash-routed SPAs), for others it's an
- *   in-page anchor. Deciding which destinations are real pages is the AI gate's
- *   job (decide.mjs), with content-dedup as the safety net — the algorithm
- *   never pattern-matches `#/`, `?`, etc.
+ * - FRAGMENT policy: a plain id anchor (#install, #main-content, #step-3) just
+ *   points at a SECTION of the SAME page — keeping it makes the crawler fetch one
+ *   page many times over (the single biggest source of wasted work on docs sites,
+ *   e.g. firebase get-started#add-sdk / #kotlin / #next-steps as "separate pages").
+ *   A hash-ROUTE (#/contact, #!/features) IS a real separate page in a hash-routed
+ *   SPA. So we keep only route-like fragments (`#/…` or `#!…`) and drop plain
+ *   anchors, collapsing `page#a`, `page#b` and `page` to one. Content-dedup stays
+ *   as a second safety net.
  * - lowercase the host
  * - strip a trailing slash (except the root path)
  * Returns null when the input cannot be parsed.
@@ -30,6 +33,10 @@ const STRIP_PARAMS = new Set([
   'gclid', 'fbclid', 'msclkid', 'mc_cid', 'mc_eid', '_ga', '_hsenc', '_hsmi',
   'ref', 'ref_src', 'igshid', 'hl', 'lang', 'locale',
 ]);
+// Some trackers append DYNAMIC param names (Google Analytics linker `_gl`, the
+// per-stream `_ga_XXXXXXX`, GA4 `_up`). Match these by PREFIX so a session id baked
+// into the name can't dodge the filter and spawn a duplicate URL of the same page.
+const STRIP_PARAM_PREFIXES = ['_ga', '_gl', '_up', 'utm_', 'mc_'];
 
 export function normalizeUrl(input, base) {
   let u;
@@ -39,11 +46,15 @@ export function normalizeUrl(input, base) {
     return null;
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  // Fragment kept as-is (see note above) — no URL-shape assumptions.
+  // Drop a plain in-page anchor; keep a hash ROUTE (#/… or #!…). See note above.
+  if (u.hash && !/^#[!/]/.test(u.hash)) u.hash = '';
   u.hostname = u.hostname.toLowerCase();
   if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, '');
   for (const k of [...u.searchParams.keys()]) {
-    if (STRIP_PARAMS.has(k.toLowerCase())) u.searchParams.delete(k);
+    const lk = k.toLowerCase();
+    if (STRIP_PARAMS.has(lk) || STRIP_PARAM_PREFIXES.some((p) => lk.startsWith(p))) {
+      u.searchParams.delete(k);
+    }
   }
   return u.toString();
 }

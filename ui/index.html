@@ -539,6 +539,7 @@
         <div><label>Max pages (0=∞)</label><input id="maxPages" type="number" value="0" min="0" /></div>
         <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
         <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
+        <div><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
       </div>
 
       <details class="opts-guide">
@@ -557,6 +558,11 @@
             <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
             <dt>Exclude</dt>
             <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
+            <dt>Focus on task</dt>
+            <dd>How strictly to stay on the task. <code>0</code> = off (default — never drops a
+              page). Raise it (e.g. <code>0.5</code>) to skip links that don't match your task
+              words: faster and more on-topic, but it may miss a page with vague link text. It
+              reads <b>your task</b>, not the site, so it works on any site without rules.</dd>
           </dl>
           <p class="og-foot">
             <b>Regex examples:</b> Include <code>/docs/</code> stays in that section ·
@@ -611,6 +617,9 @@
         </div>
         <div class="stat eta" title="Rough time left, from the current crawl rate and the live queue">
           <div class="stat-n" id="st-eta">—</div><div class="stat-c">left</div>
+        </div>
+        <div class="stat" id="st-ai-box" title="AI tokens used so far (input + output). Multiply by your model's per-token price to approximate the API cost.">
+          <div class="stat-n" id="st-tokens">—</div><div class="stat-c">AI tokens</div>
         </div>
       </div>
       <div class="prog-stack">
@@ -683,6 +692,7 @@ let runScans = [];          // ordered scans (links) shown in the current run vi
 let activeScanId = null;    // which link tab is open
 let runMode = 'view';       // 'live' | 'view'
 let crawlFinished = false;  // a live crawl has reached 'done' (reshape becomes available)
+let runTokens = null;       // run-level AI token total (input+output) for cost approximation
 let sideTab = 'activity';   // right panel: 'activity' | 'tree' | 'reshape'
 let provider = 'ollama';    // 'ollama' | 'openai' (any OpenAI-compatible API)
 let availableModels = [];   // [{ name, isCloud, size }] from the model probe
@@ -847,6 +857,8 @@ function collectOptions() {
   }
   if ($('include').value.trim()) o.include = $('include').value.trim();
   if ($('exclude').value.trim()) o.exclude = $('exclude').value.trim();
+  const mr = Number($('minRelevance').value) || 0;
+  if (mr > 0) o.minRelevance = mr;
   return o;
 }
 
@@ -1201,6 +1213,33 @@ function resetStats() {
   $('st-crawled').textContent = '0';
   $('st-queued').textContent = '0';
   $('st-eta').textContent = '—';
+  runTokens = null;
+  showTokens();
+}
+
+// AI token readout (runTokens is declared with the other run state up top). Updated
+// from progress/done events and from a reopened run's saved totals; lets the user
+// approximate the API cost.
+function fmtCompact(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+  return String(n);
+}
+function showTokens() {
+  const el = $('st-tokens'); if (!el) return;
+  const t = runTokens;
+  if (!t || !(t.inputTokens || t.outputTokens || t.calls)) {
+    el.textContent = '—';
+    $('st-ai-box').title = 'AI tokens used (input + output). Multiply by your model\'s per-token price to approximate the API cost.';
+    return;
+  }
+  const total = (t.inputTokens || 0) + (t.outputTokens || 0);
+  el.textContent = fmtCompact(total);
+  $('st-ai-box').title =
+    `${total.toLocaleString()} AI tokens — ${(t.inputTokens || 0).toLocaleString()} in · ` +
+    `${(t.outputTokens || 0).toLocaleString()} out · ${(t.calls || 0).toLocaleString()} calls. ` +
+    `Multiply by your model's per-token price to approximate the API cost.`;
 }
 
 function updateRunProgress(s) {
@@ -1425,6 +1464,8 @@ async function openRun(id) {
     const np = (s.stats && s.stats.pages) || 0;
     sc.prog = { pct: 100, done: np, total: np, pending: 0, eta: '', label: np + ' page(s) · ' + (s.files || []).length + ' file(s)' };
   }
+  runTokens = (manifest.stats && manifest.stats.tokens) || null; // saved AI cost
+  showTokens();
   renderLinkTabs();
   selectScan((runScans[0] || {}).scanId);
   await loadActivity(id);
@@ -1471,7 +1512,10 @@ function logLine(html, cls) {
 // Each page keeps its own "current view", so clicks attach to the view they
 // happened in and parallel pages (concurrency) never cross-nest.
 const tree = { roots: [], siteRoot: null, pages: new Map(), last: null, count: 0 };
-const TREE_CAP = 800; // keep it light; the full detail lives in the saved files
+// Cap the LIVE tree only to keep the DOM light (the full detail lives in the saved
+// files). Raised well above the old 800 — that froze visibly on big crawls — and
+// the redraw is now debounced (scheduleTreeRender) so a large tree stays smooth.
+const TREE_CAP = 5000;
 
 function hostLabel(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u || ''; } }
 function urlKey(u) { try { return new URL(u).href; } catch { return u || ''; } }
@@ -1558,7 +1602,16 @@ function treeOnEvent(ev) {
     const target = (p && p.last) || tree.last;
     if (target) target.captured = true;
   } else return;
-  if (sideTab === 'tree') renderTree();
+  if (sideTab === 'tree') scheduleTreeRender();
+}
+
+// Coalesce bursts of events into one redraw per frame — a big tree rebuilt on
+// every single action event is what made it stutter/feel stuck.
+let _treeRenderQueued = false;
+function scheduleTreeRender() {
+  if (_treeRenderQueued) return;
+  _treeRenderQueued = true;
+  requestAnimationFrame(() => { _treeRenderQueued = false; renderTree(); });
 }
 
 function treeRows(n, prefix, isLast, isRoot) {
@@ -1685,6 +1738,7 @@ function handle(ev) {
       break;
     }
     case 'progress': {
+      if (ev.tokens) { runTokens = ev.tokens; showTokens(); }
       const s = getScan(ev.scanId);
       if (s) {
         const total = ev.total || 0, done = ev.done || 0;
@@ -1716,6 +1770,7 @@ function handle(ev) {
       $('status').textContent = 'done';
       $('stop').classList.add('hidden');
       crawlFinished = true;
+      if (ev.stats && ev.stats.tokens) { runTokens = ev.stats.tokens; showTokens(); }
       syncSide(getScan(activeScanId)); // crawl over → Reshape becomes available, Activity/Tree stay
       break;
   }

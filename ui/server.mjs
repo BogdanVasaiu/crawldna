@@ -126,11 +126,13 @@ async function handleStart(req, res) {
     save: true,
     onEvent: (ev) => {
       eventBuffer.push(ev);
-      if (eventBuffer.length > 5000) eventBuffer.shift();
+      if (eventBuffer.length > 20000) eventBuffer.shift();
       const t = traceEvent(ev);
       if (t) {
         activityTrace.push(t);
-        if (activityTrace.length > 4000) activityTrace.shift();
+        // Keep a long history so a reopened large crawl replays its whole Activity
+        // + Tree (the old 4000 cap silently dropped the earliest part of the run).
+        if (activityTrace.length > 20000) activityTrace.shift();
       }
       if (ev.type === 'saved' && ev.runId) savedRunId = ev.runId;
       // Persist the timeline once the run is saved so a finished/reopened run can

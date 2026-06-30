@@ -71,6 +71,19 @@ function sanitizeOptions(o = {}) {
 const scanPages = (s) => (s && s.stats && s.stats.pages) || (s && s.pages ? s.pages.length : 0) || 0;
 const aggregatePages = (scans) => scans.reduce((n, s) => n + scanPages(s), 0);
 
+/** Sum AI token usage across scans — a fallback when no run-level total is given. */
+function aggregateTokens(scans) {
+  const t = { calls: 0, inputTokens: 0, outputTokens: 0 };
+  for (const s of scans) {
+    const u = s && s.stats && s.stats.tokens;
+    if (!u) continue;
+    t.calls += u.calls || 0;
+    t.inputTokens += u.inputTokens || 0;
+    t.outputTokens += u.outputTokens || 0;
+  }
+  return t;
+}
+
 /** The full, machine-friendly index for one scan (also written into its folder). */
 function buildScanManifest(scan) {
   // url -> first file that contains its content
@@ -97,25 +110,26 @@ function buildScanManifest(scan) {
   };
 }
 
-function buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings }) {
+function buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens }) {
   return {
     runId: id,
     createdAt,
     durationMs,
     targets: (targets || []).map((t) => ({ url: t.url, task: t.task })),
     options: sanitizeOptions(options),
-    stats: { pages: aggregatePages(scans), durationMs, scans: scans.length },
+    stats: { pages: aggregatePages(scans), durationMs, scans: scans.length, tokens: tokens || aggregateTokens(scans) },
     scans: scans.map(buildScanManifest),
     warnings: warnings || [],
   };
 }
 
-function buildSummary({ id, createdAt, durationMs, scans, warnings }) {
+function buildSummary({ id, createdAt, durationMs, scans, warnings, tokens }) {
   return {
     id,
     createdAt,
     durationMs,
     pages: aggregatePages(scans),
+    tokens: tokens || aggregateTokens(scans),
     scans: scans.map((s) => ({
       scanId: s.scanId,
       url: s.url,
@@ -137,7 +151,7 @@ function buildSummary({ id, createdAt, durationMs, scans, warnings }) {
  * @param {Array} a.scans   per-link scans: { scanId, url, task, title, pages, files, stats, warnings }
  * @returns {Promise<{ id, dir, manifest, summary }>}
  */
-export async function saveRun({ targets, options, scans = [], durationMs = 0, warnings = [] }) {
+export async function saveRun({ targets, options, scans = [], durationMs = 0, warnings = [], tokens = null }) {
   const id = newRunId();
   const dir = runDir(id, options);
   const createdAt = new Date().toISOString();
@@ -151,8 +165,8 @@ export async function saveRun({ targets, options, scans = [], durationMs = 0, wa
     await writeBundle(path.join(dir, sid), { files: scan.files || [], manifest: buildScanManifest(scan) });
   }
 
-  const manifest = buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings });
-  const summary = buildSummary({ id, createdAt, durationMs, scans, warnings });
+  const manifest = buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens });
+  const summary = buildSummary({ id, createdAt, durationMs, scans, warnings, tokens });
 
   await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   await writeFile(path.join(dir, 'run.json'), JSON.stringify(summary, null, 2) + '\n', 'utf8');

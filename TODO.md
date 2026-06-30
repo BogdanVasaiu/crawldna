@@ -1,0 +1,525 @@
+# sagecrawl — TODO miglioramenti
+
+> Backlog di miglioramenti **allineati alla filosofia del progetto**, pensato per
+> essere lavorato un pezzo alla volta nelle sessioni future. In una nuova sessione
+> basta dire: _"apri TODO.md e implementiamo il #N"_.
+>
+> Fonte: revisione approfondita (2026-06-30) di concorrenti (Crawl4AI, Firecrawl/
+> FIRE-1, Skyvern, browser-use) + ricerca accademica, incrociata col nostro codice.
+> Vedi anche [ARCHITECTURE.md](ARCHITECTURE.md) e [build-spec.md](build-spec.md).
+
+---
+
+## Posizionamento (cosa È sagecrawl)
+
+sagecrawl è uno **strumento generale e autonomo**, utile a chiunque — non un pezzo di
+refdna. Il suo valore, per qualsiasi utente e qualsiasi sito:
+
+1. **Estrae tutto, anche il nascosto/dinamico** (il reveal: tab, accordion, "load more",
+   wizard, contenuto lazy). È il differenziatore.
+2. **Segue una task generica QUALSIASI e la rispetta** ("la documentazione", "il menù
+   delle pizze", "i prezzi", "gli orari") → tiene solo ciò che la task chiede.
+3. **Output pulito, senza roba inutile**, e **fedele** (verbatim nel crawl; ogni
+   trasformazione è Fase 2/reshape).
+
+**refdna è SOLO UNO dei consumatori** (userà sagecrawl per il caso "documentazioni").
+Le scelte di design vanno valutate sul tool **generale**, non su refdna. Differenza dai
+concorrenti task-driven (Firecrawl `/extract`, ScrapeGraphAI): loro **trasformano** la
+pagina nei campi di uno schema; sagecrawl tiene **tutto il pertinente, verbatim** — non
+perdi ciò che non avevi previsto.
+
+---
+
+## Regole non negoziabili (valgono per OGNI item qui sotto)
+
+Chi implementa un punto DEVE rispettare questi principi, anche a costo di fare di meno:
+
+1. **Precisione prima della velocità, sempre.** Lento va bene. **Mai perdere contenuto.**
+   Ogni ottimizzazione che *potrebbe* scartare contenuto va resa **opzionale** o
+   **conservativa**, e va verificata che non riduca la copertura.
+2. **Universale, mai per-sito.** Niente regex/selettori specifici di un sito o
+   framework. Le decisioni si basano sulla **task dell'utente** (via AI o segnali di
+   testo universali), non sulla forma degli URL del sito.
+3. **Due fasi separate.** Il *crawl* (Fase 1) tiene contenuto **verbatim**; filtri,
+   tabelle, split sono **Fase 2 (reshape)** sui file salvati. Un item non deve
+   spostare lavoro di reshape dentro il crawl.
+4. **Backstop deterministici = leggono l'istruzione dell'utente, non il sito.** Sono
+   ammessi come rete di sicurezza, ma il giudice primario resta l'AI.
+5. **Dipendenze minime.** Preferire JS puro / Node built-in. Niente dipendenze pesanti
+   nel core senza un buon motivo.
+
+**Come verificare di non aver perso nulla** (per gli item a rischio): rifare un crawl
+di riferimento (es. Firebase web, o un sito calendario tipo ACI Cremona) *prima e dopo*
+la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rivelati.
+
+---
+
+## Previsioni oneste — cosa risolvono e cosa NO
+
+- **Gruppo A (#1–#9)** migliora **nettamente precisione e tempi/consumi** del *crawl*.
+  Alta confidenza.
+- **Il "rispetto della task"** (output mirato, senza roba inutile) è una **spina a 3
+  livelli**: la frontiera (**#1**: quali pagine), lo scope di sezione (`aiScopeContent`:
+  quali parti di una pagina) e il **reshape/#11** (filtro fine finale). Il Gruppo A
+  copre il primo livello; il #11 il terzo. La ricerca avverte: gli LLM confondono
+  *istruzione* e *contenuto* → un secondo passaggio di verifica aiuta (vedi #11/#12).
+- **La completezza al 100% non è dimostrabile** (risultato accademico: un singolo crawl
+  non sa quanto ha mancato). Si **misura per proxy** → vedi **#12** (copertura sitemap +
+  metro stile SWDE su task diverse).
+- **Il modello locale NON è un tetto duro** per classificazione/estrazione (la ricerca
+  dice differenza ~2% coi grandi, non significativa; soffre di *recall* non di
+  precisione). #1/#2 lo rendono più affidabile trasformando i giudizi in
+  classificazione vincolata.
+- **Fuori scope per sempre** (ARCHITECTURE.md §14): login/paywall, CAPTCHA, contenuto
+  solo-immagine/canvas. Si saltano con un warning, non si aggirano.
+
+---
+
+## Tabella riassuntiva
+
+**Gruppo A — Crawl: precisione & consumi**
+
+| # | Titolo | Effetto | Sforzo | Stato |
+|---|--------|---------|--------|-------|
+| 1 | Link relevance ranking dalla task (information foraging) | consumi + precisione | Medio | ✅ fatto (2026-07-01, da verificare dal vivo) |
+| 2 | Output JSON vincolato (constrained decoding) | consumi + precisione | Basso | ✅ fatto (2026-07-01, da verificare dal vivo) |
+| 3 | Trigger "documentazione" universale (multilingua) | consumi + precisione | Basso-Medio | ✅ fatto (2026-07-01) |
+| 4 | Prompt caching del prefisso istruzioni (API remote) | consumi | Basso | ☐ da fare |
+| 5 | Riuso contesto browser per worker (cache asset) | consumi (tempo+banda) | Basso-Medio | ☐ da fare |
+| 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | ☐ da fare |
+| 7 | Dedup near-duplicate con SimHash | precisione output + consumi | Medio | ☐ da fare |
+| 8 | Estrazione stile Trafilatura (pruning per densità link) | precisione | Medio | ☐ da fare |
+| 9 | Rinforzo reveal: accessibility-tree / Set-of-Marks | precisione (casi difficili) | Alto | ☐ da fare |
+
+**Gruppo B — Rispetto della task & fruibilità dell'output (generale)**
+
+| # | Titolo | Effetto | Sforzo | Stato |
+|---|--------|---------|--------|-------|
+| 10 | Output per-documento identificabile + metadata (opzione) | fruibilità | Medio | ☐ da fare |
+| 11 | Reshape (Fase 2): fedeltà verificata | rispetto-task | Medio | ☐ da fare |
+| 12 | Harness di misurazione (completezza / rispetto-task / token) | trasversale — abilita tutto | Medio | ☐ da fare |
+
+**Da fare per primi (qualità del crawl):** #1, #2, #3.
+**Per dimostrare il valore (misurabile):** #12.
+**Per i consumatori programmatici (refdna incluso):** #10 + #6.
+
+---
+
+## #1 — Link relevance ranking dalla task (information foraging)
+**Effetto:** consumi + precisione · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-01)
+
+> **Implementato.** Nuovo modulo [src/lib/relevance.mjs](src/lib/relevance.mjs)
+> (tokenizzazione multilingua + `scoreLink` task→link, zero dipendenze, deterministico).
+> Integrato in `decideFollow` ([src/engine/crawl-page.mjs](src/engine/crawl-page.mjs)):
+> (a) **default (`minRelevance: 0`)** — non scarta NULLA; usa il punteggio solo per
+> ordinare i link **best-first** e per rankare l'input all'AI (così il cap di 160 tiene i
+> più pertinenti); (b) **focused mode opt-in (`minRelevance` 0..1)** — scarta i link
+> chiaramente fuori-tema PRIMA dell'AI, ma solo quando la task **discrimina** tra i link
+> della pagina (un task generico non sovra-taglia mai). Nuova opzione `minRelevance` in
+> `DEFAULT_OPTIONS`, esposta in UI ("Focus on task") e CLI (`--min-relevance`).
+> **Verificato** (scratchpad): scoring su URL Firebase reali (web/auth=1.0, firestore=0.5,
+> iOS/pricing/codelabs=0.0) + flusso di `decideFollow` (default non taglia / focused taglia
+> prima dell'AI / generico non sovra-taglia) — ALL PASS. ⏳ **Da verificare dal vivo** con
+> un crawl reale (Ollama+Playwright) e da misurare con #12.
+>
+> _Decisione presa:_ il punteggio NON scarta mai da solo in default (rispetta "non perdere
+> contenuto"); il taglio è opt-in. _Possibile seguito:_ best-first a livello di frontiera
+> globale (oggi è per-batch di pagina) e passare `context` (heading) ai candidati link.
+
+**Problema oggi.** Il crawl segue *tutti* i link in scope finché la coda è vuota: su
+Firebase ha generato ~7000 pagine in coda / 5h, entrando in iOS/Android/pricing che la
+task ("web JavaScript/Vue") non chiedeva. Lo scope è affidato solo all'AI-gate
+`aiSelectLinks` ([src/engine/decide.mjs:327](src/engine/decide.mjs)) che ha bias
+"nel dubbio segui" ed è debole sul modello locale.
+
+**Proposta.** Prima di chiamare l'AI, dare a ogni link scoperto un **punteggio di
+rilevanza** rispetto alla task usando solo testo universale (token dell'URL + anchor +
+heading vicino):
+- **v1 senza dipendenze:** term-overlap / BM25 in JS puro (è la "statistical strategy"
+  di default di Crawl4AI).
+- **v2 opzionale:** embedding locali (Ollama `nomic-embed-text`) per similarità semantica.
+
+Poi: seguire prima i link ad alto punteggio; mandare all'AI-gate **solo i link
+ambigui** (punteggio medio); scartare i chiaramente fuori-tema. Si innesta in
+`decideFollow` ([src/engine/crawl-page.mjs:25](src/engine/crawl-page.mjs)) e nella
+gestione della frontiera in `runGeneralCrawl` ([src/index.mjs](src/index.mjs)).
+
+**Perché è nella filosofia.** È la **task** a decidere lo scope, con segnali universali
+(no regole per-sito). È la versione corretta e supportata da letteratura di ciò che NON
+va fatto (regex `exclude` scritte a mano per Firebase).
+
+**Criterio di accettazione (anti-perdita).**
+- Su un crawl di riferimento: le pagine **in-tema** tenute restano le stesse (nessuna
+  pagina web persa), mentre crollano le pagine fuori-tema visitate e le chiamate
+  all'AI-gate.
+- ⚠️ **Tenere solo l'ORDINAMENTO/filtro per rilevanza.** Lo "stop quando saturo"
+  (early-stopping di Crawl4AI) NON va attivato di default: contraddice "non perdere mai
+  contenuto". Eventualmente solo come opzione esplicita.
+- Soglia di scarto conservativa: nel dubbio, manda all'AI (non scartare).
+
+**Evidenza.** Focused crawling (Chakrabarti 1999); Crawl4AI adaptive crawling
+(`top_k_links`, `KeywordRelevanceScorer`, coverage/saturation).
+
+**File:** `src/engine/crawl-page.mjs` (decideFollow), `src/engine/decide.mjs`
+(aiSelectLinks), `src/index.mjs` (frontiera), eventuale nuovo `src/lib/relevance.mjs`.
+
+---
+
+## #2 — Output JSON vincolato (constrained decoding)
+**Effetto:** consumi + precisione · **Sforzo:** Basso · **Stato:** ✅ FATTO (2026-07-01)
+
+> **Implementato.** `chat(llm, system, user, schema?)` ([src/lib/llm.mjs](src/lib/llm.mjs))
+> ora accetta uno schema opzionale: **Ollama** → `format: schema` (constrained decoding via
+> XGrammar — JSON valido al 100%, più veloce); **OpenAI-compatibile** → `response_format:
+> {type:'json_object'}` (supportato da OpenAI/DeepSeek/Groq/vLLM/LM Studio), con **retry
+> automatico senza** se il provider lo rifiuta (400/404/422/…), così un crawl non si rompe
+> mai. Le 5 chiamate di giudizio in [decide.mjs](src/engine/decide.mjs) passano il loro
+> schema (`SCHEMAS.reveal/links/keep/relevant/plan`); il **reshape resta testo libero** (non
+> è JSON). La validazione a valle in ogni funzione resta la rete di sicurezza.
+> **Verificato** (scratchpad transport-json-test): schema→response_format, rifiuto→retry-senza,
+> niente-schema→niente-response_format, metering token intatto — ALL PASS. ⏳ **Da verificare
+> dal vivo** su Ollama (qwen3-coder:30b) — confermare che `format` accelera e azzera i parse
+> falliti; misurare con #12 (token per-tipo).
+
+**Problema oggi.** Le 4 chiamate AI (reveal/scope/links/nav-plan) chiedono JSON come
+testo libero e lo estraggono con regex (`parseJson` in
+[src/engine/decide.mjs:24](src/engine/decide.mjs)). **Se il parsing fallisce, il
+fallback è "segui/tieni TUTTO"** ([src/engine/crawl-page.mjs:40](src/engine/crawl-page.mjs))
+→ spreco + vagabondaggio fuori-tema. In `llm.mjs` non si passa nessuno schema.
+
+**Proposta.** In [src/lib/llm.mjs](src/lib/llm.mjs):
+- `ollamaChat` → aggiungere il campo `format` con lo **JSON schema** (Ollama usa
+  XGrammar per il constrained decoding).
+- `openaiChat` → aggiungere `response_format: { type: "json_schema", … }`.
+- Estendere `chat(llm, system, user, schema?)` per passare lo schema opzionale; i
+  chiamanti in `decide.mjs` forniscono lo schema della rispettiva risposta
+  (`{click:[...]}`, `{keep:[...]}`, `{follow:[...]}`, `{direction,target}`).
+
+**Effetto.** JSON valido **100%** delle volte → niente fallback distruttivi (meno
+off-task) **e** su Ollama generazione fino a ~6× più veloce (niente token sprecati a
+formattare).
+
+**Criterio di accettazione.** Le stesse decisioni di prima ma con zero `parseJson`
+falliti nei log; nessuna regressione di copertura; verificare che lo schema non sia
+troppo rigido (deve permettere liste vuote = "non seguire/non rivelare nulla").
+
+**Evidenza.** Ollama structured outputs (XGrammar); JSONSchemaBench (arXiv 2501.10868).
+
+**File:** `src/lib/llm.mjs`, `src/engine/decide.mjs`.
+
+---
+
+## #3 — Trigger "documentazione" universale (multilingua)
+**Effetto:** consumi + precisione · **Sforzo:** Basso-Medio · **Stato:** ✅ FATTO (2026-07-01)
+
+> **Implementato.** `isDocsTask` ([src/lib/task.mjs](src/lib/task.mjs)) ora matcha lo
+> **stem** della parola-documentazione invece di una sola lingua: `documenta` copre
+> documentation / documentazione / documentación / documentação / documentatie;
+> `dokumenta` copre tedesco/nordico; più `docs`, `api reference`, `sdk`. Lo stem (non un
+> "document" nudo) evita falsi positivi su task-dato tipo "the documents list". Una sola
+> funzione risolve **entrambe** le metà del bug (via sitemap + niente taglia-sezioni),
+> perché è usata sia in index.mjs (strategia) sia in crawl-page.mjs (scope gate).
+> **Verificato** (scratchpad task-test): 11 task-docs in 6 lingue (incl. l'esatta task
+> Firebase italiana) → tutte true; 6 task-dato (menu/prezzi/orari/"documents list") →
+> tutte false. ALL PASS. _Upgrade futuro opzionale:_ classificazione AID dell'intento per
+> lingue non-latine (CJK/cirillico), una volta per scan, con questo matcher come fallback.
+
+**Problema oggi.** `isDocsTask` ([src/lib/task.mjs:4](src/lib/task.mjs)) riconosce solo
+parole **inglesi** (`documentation|docs|api reference`). Una task in italiano
+("documentazione") NON viene riconosciuta → il crawl (1) **salta la via sitemap**
+completa+veloce e (2) attiva per sbaglio il taglia-sezioni per-pagina
+(`aiScopeContent`, eseguito solo per task NON-doc, [src/engine/crawl-page.mjs:195](src/engine/crawl-page.mjs))
+→ brucia token e **rischia di scartare sezioni** di documentazione.
+
+**Proposta (in ordine di preferenza filosofica).**
+- **Meglio:** far classificare l'**intento** della task all'AI una volta sola
+  (doc / non-doc) — coerente con "l'AI legge la task". Cache per stringa-task.
+- **Minimo:** ampliare il backstop a più lingue (documentazione/documentación/
+  dokumentation/…). È ammesso (legge l'istruzione dell'utente, non il sito) ma è la
+  soluzione "rozza".
+
+**Criterio di accettazione.** Con task "estrai la documentazione…" in italiano: il log
+mostra `strategy: docs:sitemap` (o `docs:llms-full`), e `aiScopeContent` NON gira; le
+pagine restano intere (verbatim).
+
+**Evidenza.** Comportamento previsto da ARCHITECTURE.md §5/§10 (docs profile).
+
+**File:** `src/lib/task.mjs`, `src/index.mjs:283`, eventuale interpret-step AI.
+
+---
+
+## #4 — Prompt caching del prefisso istruzioni (API remote)
+**Effetto:** consumi · **Sforzo:** Basso · **Stato:** ☐
+
+**Problema oggi.** I system-prompt in `decide.mjs` sono lunghi (~1.5–2.5k caratteri) e
+**identici** su migliaia di chiamate. Su API a pagamento sono token pagati ogni volta.
+
+**Proposta.** Tenere le istruzioni grosse come **prefisso stabile** (già lo sono: sono
+nel messaggio `system`). Poi:
+- OpenAI / DeepSeek: cachano **automaticamente** i prefissi identici → assicurarsi solo
+  che il system-prompt sia byte-identico tra chiamate dello stesso tipo.
+- Anthropic-style: aggiungere il marcatore `cache_control` sul blocco system in
+  `openaiChat`/transport.
+
+**Effetto.** Token di input ripetuti ~**10× più economici**. Conta soprattutto per la
+via a pagamento (refdna). Per Ollama locale è poco rilevante.
+
+**Criterio di accettazione.** Su un provider che riporta i cached tokens, il metering
+mostra una quota crescente di input cachato dopo le prime chiamate.
+
+**Evidenza.** Anthropic prompt caching; OpenAI automatic prefix caching.
+
+**File:** `src/lib/llm.mjs`, (struttura prompt) `src/engine/decide.mjs`.
+
+---
+
+## #5 — Riuso contesto browser per worker
+**Effetto:** consumi (tempo + banda) · **Sforzo:** Basso-Medio · **Stato:** ☐
+
+**Problema oggi.** `newPage()` ([src/lib/browser.mjs:87](src/lib/browser.mjs)) apre un
+**contesto nuovo per ogni pagina** → la cache HTTP non è condivisa → CSS/JS comuni del
+sito vengono **ri-scaricati per ogni pagina**.
+
+**Proposta.** Riusare **un contesto per worker** (concurrency = N → N contesti
+riutilizzati), aprendo/chiudendo solo la `page` per ogni URL. Così il browser cacha gli
+asset condivisi tra pagine dello stesso sito, mantenendo il parallelismo. Lo "spione"
+(`addInitScript(SNIFFER)`) va messo sul contesto, una volta.
+
+**Criterio di accettazione.** Tempo medio per pagina più basso su un sito doc grande;
+nessun cambiamento nel contenuto estratto. Attenzione a stato/cookie tra pagine (per un
+crawl in sola lettura è accettabile; valutare reset se un sito si comporta male).
+
+**File:** `src/lib/browser.mjs`, `src/engine/crawl-page.mjs`, `src/index.mjs` (pool worker).
+
+---
+
+## #6 — Crawl incrementale (ETag / Last-Modified / sitemap lastmod)
+**Effetto:** consumi (enorme per refdna) · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** Ogni crawl riparte da zero. refdna dovrà tenere i doc **freschi** nel
+tempo: ri-renderizzare migliaia di pagine immutate è spreco puro.
+
+**Proposta.**
+- Salvare per URL: `ETag`, `Last-Modified`, hash del contenuto (già calcoliamo un sha1
+  in `addPage`).
+- Al ri-crawl: mandare `If-None-Match` / `If-Modified-Since` → un **304** salta del
+  tutto render + reveal. Confronto hash come rete se il server non supporta i validator.
+- Sitemap: usare `<lastmod>` per **saltare prima del fetch** le pagine non cambiate
+  ([src/profiles/docs/sitemap.mjs](src/profiles/docs/sitemap.mjs)).
+
+**Criterio di accettazione.** Un secondo crawl ravvicinato dello stesso sito processa
+solo le pagine cambiate; le immutate risultano "skipped (304/lastmod)"; output
+identico per le pagine non cambiate.
+
+**Evidenza.** Google "Crawling December: HTTP caching"; Google/Bing su `lastmod`.
+
+**File:** `src/lib/fetcher.mjs`, `src/engine/crawl-page.mjs`, `src/lib/runs.mjs`
+(persistenza validator), `src/profiles/docs/sitemap.mjs`.
+
+---
+
+## #7 — Dedup near-duplicate con SimHash
+**Effetto:** precisione output + consumi · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** Il dedup scarta solo i doppioni **esatti** (sha1 del contenuto
+normalizzato in [src/index.mjs](src/index.mjs) `addPage`) e **dopo** aver renderizzato.
+Pagine quasi-identiche (stesso contenuto, template leggermente diverso) passano come
+distinte → output gonfio, peggio per il chunking di refdna.
+
+**Proposta.**
+- **Parte sicura (precision-neutral):** sostituire/affiancare lo sha1 con un **SimHash
+  64-bit** + distanza di Hamming **≤3** per collassare le near-dupe. Vale anche a
+  livello di blocco nel `BlockAccumulator` ([src/extract.mjs](src/extract.mjs)).
+- **Parte opzionale (efficienza, con cautela):** un pre-fetch statico (solo HTTP, niente
+  browser) + SimHash per **saltare il render** di near-dupe ovvie. ⚠️ Rischioso per la
+  completezza (potrebbe saltare una pagina il cui contenuto nascosto differisce) → di
+  default OFF o molto conservativo.
+
+**Criterio di accettazione.** Le pagine collassate sono davvero ~identiche (ispezione a
+campione); nessuna pagina con contenuto unico viene scartata. Per la parte opzionale:
+A/B su un sito di riferimento, confermare 0 perdita di contenuto unico.
+
+**Evidenza.** Manku/Google "Detecting Near-Duplicates for Web Crawling"; Charikar SimHash.
+
+**File:** `src/index.mjs` (addPage), `src/extract.mjs` (BlockAccumulator), nuovo
+`src/lib/simhash.mjs`.
+
+---
+
+## #8 — Estrazione stile Trafilatura (pruning per densità di link)
+**Effetto:** precisione · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** `extract.mjs` sceglie "il nodo più denso di testo"
+([src/extract.mjs:98](src/extract.mjs)) e toglie una **lista fissa di classi-chrome**
+([src/extract.mjs:11](src/extract.mjs)). Robusto, ma la lista fissa è un po' "per-caso"
+e può lasciare boilerplate o tagliare contenuto su layout inusuali.
+
+**Proposta.** Aggiungere segnali **universali** in stile Trafilatura, senza diventare
+neurali (la ricerca dice che l'euristica è meglio del neurale qui):
+- **Pruning per densità di link**: un blocco con rapporto link/testo molto alto = nav →
+  scartabile (segnale universale, non un nome di classe).
+- **Cascade con fallback**: prova estrazione "precisa", se il risultato è troppo
+  povero ricadi su una più permissiva.
+
+**Criterio di accettazione.** Su pagine doc di riferimento, meno chrome residuo e nessun
+contenuto vero perso (confronto byte + ispezione). NON introdurre un estrattore AI.
+
+**Evidenza.** Trafilatura (Barbaresi, F1 ~0.91); SIGIR 2023 (Bevendorff): euristica >
+neurale per il contenuto principale.
+
+**File:** `src/extract.mjs`.
+
+---
+
+## #9 — Rinforzo reveal: accessibility-tree / Set-of-Marks
+**Effetto:** precisione (casi difficili) · **Sforzo:** Alto · **Stato:** ☐
+
+**Problema oggi.** Il rilevamento controlli è già ottimo (≈ browser-use: tag + ARIA +
+sniffer listener + visibilità). Resta il raro controllo **visivamente ovvio ma
+invisibile al DOM** (es. eventi delegati senza classe né `cursor:pointer`).
+
+**Proposta (solo come RIPIEGO, non di default).** Quando il reveal trova pochissimo,
+fare un passaggio extra:
+- **Accessibility tree** (lo stesso albero degli screen reader) come seconda fonte di
+  elementi interattivi, **oppure**
+- **Set-of-Marks**: screenshot con ogni elemento interattivo numerato → Vision LLM che
+  sceglie. Usato da browser-use e Project Mariner.
+
+⚠️ Costa uno screenshot + una chiamata vision → attivarlo solo come fallback mirato, per
+non appesantire ogni pagina (contro l'efficienza).
+
+**Criterio di accettazione.** Su una pagina nota "difficile", il fallback recupera
+contenuto che il path DOM non trovava; sulle pagine normali non si attiva.
+
+**Evidenza.** browser-use interactive element detection; Set-of-Marks (Yang 2023);
+Skyvern (vision).
+
+**File:** `src/engine/perceive.mjs`, `src/engine/reveal.mjs`, `src/lib/browser.mjs`.
+
+---
+
+## #10 — Output per-documento identificabile + metadata (opzione)
+**Effetto:** fruibilità · **Sforzo:** Medio · **Stato:** ☐
+**(Era già un item strutturale rimandato.)**
+
+**Problema oggi.** `assembleScan` ([src/lib/layout.mjs](src/lib/layout.mjs)) produce
+**UN solo .md consolidato** per scan (Firebase = 9.5MB). Per **qualsiasi consumatore
+programmatico** (uno script, una pipeline, un indice, e sì anche refdna) è scomodo:
+serve **un documento per pagina** con **metadata** (URL, titolo, data) per poterli
+trattare singolarmente con ID stabili.
+
+**Proposta.** Aggiungere un formato output **per-pagina** (o JSONL) come **opzione**: un
+record per pagina `{ url, title, fetchedAt, markdown, headings?/sectionPath? }`.
+Mantenere il `.md` consolidato come default (comodo per l'utente umano). Il contenuto
+resta **verbatim** — è solo un modo diverso di impacchettarlo. Bonus: un indice (stile
+llms.txt) di cosa è stato crawlato.
+
+**Perché è nella filosofia.** Non tocca il crawl né il verbatim: cambia solo
+l'**impacchettamento** dell'output, e solo se l'utente lo chiede.
+
+**Criterio di accettazione.** Un consumatore può caricare per-documento con URL/ID
+stabili; somma dei contenuti per-pagina == contenuto del consolidato (nessuna perdita).
+
+**Esempio d'uso (refdna):** un sistema RAG vuole esattamente questo per fare chunking
+sulla struttura Markdown — è ciò che fa il concorrente **Context7** (chunk su AST
+Markdown + metadata + budget token). Ma il formato per-pagina serve a **molti** usi, non
+solo a refdna.
+
+**Evidenza.** Context7; ricerca RAG (chunking markdown-aware +5-10%, gerarchico
+parent/child, metadata enrichment) — come esempio di un consumatore tipico.
+
+**File:** `src/lib/layout.mjs`, `src/lib/output.mjs`, `src/lib/runs.mjs`.
+
+---
+
+## #11 — Reshape (Fase 2): fedeltà verificata
+**Effetto:** accuratezza · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** Il reshape ([src/reshape.mjs](src/reshape.mjs), `aiReshape` in
+[src/engine/decide.mjs](src/engine/decide.mjs)) è l'**unico** punto dove l'AI può
+riformattare/filtrare — e quindi l'unico dove potrebbe *alterare un valore*. Il prompt
+impone già "value-faithful", ma non c'è una **verifica**.
+
+**Proposta.** Aggiungere un controllo opzionale di **faithfulness**: ogni valore
+(numero/prezzo/URL/stringa) nell'output del reshape deve esistere nelle fonti; se
+qualcosa non torna, segnalarlo invece di servirlo silenziosamente. È la metrica
+anti-allucinazione di RAGAS applicata a casa nostra.
+
+**Perché è nella filosofia.** Rafforza il principio "Fase 2 è l'unico posto non-verbatim,
+ma resta fedele ai valori".
+
+**Criterio di accettazione.** Su un set di richieste reshape, 0 valori inventati non
+rilevati; le alterazioni vengono evidenziate.
+
+**Evidenza.** RAGAS *faithfulness* (decompone la risposta in claim e li verifica sul
+contesto).
+
+**File:** `src/reshape.mjs`, `src/engine/decide.mjs`.
+
+---
+
+## #12 — Harness di misurazione (completezza / rispetto-task / token)
+**Effetto:** trasversale — **abilita di valutare tutti gli altri** · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** Non c'è modo di **misurare** completezza/rispetto-task/consumi: ogni
+stima (anche le mie) è solo una stima. Senza numeri, non si sa se un item ha migliorato
+o peggiorato.
+
+**Proposta.** Misure semplici e universali, su un piccolo set di siti di prova che
+includa **task diverse** (una doc + una non-doc tipo "il menù"/"i prezzi"/"un calendario"):
+- **(a) Completezza.** (i) Reveal: il contenuto nascosto noto (tab/accordion) compare
+  nell'output? (ii) Pagine: copertura sitemap (di N URL, quante tenute?) + diff tra run.
+  (La completezza assoluta non è dimostrabile; questi sono i proxy standard.)
+- **(b) Rispetto della task = precisione "stile SWDE".** Su un sito noto, l'output
+  contiene **tutto-e-solo** ciò che la task chiedeva? Si segna su un golden set
+  (presenza degli attributi/sezioni attesi = recall; assenza di roba inutile =
+  precision). SWDE è il benchmark standard per l'estrazione su siti diversi.
+- **(c) Token per TIPO di chiamata** (reveal / scope / links / nav-plan), non solo il
+  totale → si vede *dove* vanno davvero i token.
+
+**Perché serve.** Trasforma "fidati di me" in "guarda il numero prima/dopo". È la
+risposta giusta alla tua domanda "ma risolverà davvero le mie perplessità?": si verifica,
+non si promette.
+
+**Criterio di accettazione.** Ogni item del TODO ha un numero misurabile prima/dopo.
+
+**Evidenza.** SWDE (F1 attributo-livello su 80 siti/8 categorie — metro per un crawler
+generale); misurazione coverage (sitemap-coverage / golden set; la coverage assoluta non
+è ricavabile da un singolo crawl). _Per il caso refdna_, in più, metriche RAG-side
+(RAGAS faithfulness/context-recall) — ma sono del consumatore, non del crawler.
+
+**File:** nuovo `src/eval/` o script; il metering token per-tipo tocca
+`src/lib/llm.mjs` + `src/index.mjs`.
+
+---
+
+## Riferimenti (ricerca)
+
+- Crawl4AI — Adaptive Crawling: https://docs.crawl4ai.com/core/adaptive-crawling/
+- Focused crawling (PDD, arXiv): https://arxiv.org/pdf/1411.4366
+- Near-duplicates (Manku, Google): https://research.google.com/pubs/archive/33026.pdf
+- Trafilatura evaluation: https://trafilatura.readthedocs.io/en/latest/evaluation.html
+- Web content extraction comparison (SIGIR 2023): https://dl.acm.org/doi/pdf/10.1145/3539618.3591920
+- browser-use — interactive element detection: https://deepwiki.com/browser-use/browser-use/5.3-interactive-element-detection
+- Skyvern — vision perception: https://www.skyvern.com/blog/how-skyvern-reads-and-understands-the-web/
+- Ollama structured outputs: https://www.glukhov.org/llm-performance/ollama/llm-structured-output-with-ollama-in-python-and-go/
+- Anthropic prompt caching: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+- Google — HTTP caching: https://developers.google.com/search/blog/2024/12/crawling-december-caching
+- Firecrawl FIRE-1: https://www.firecrawl.dev/blog/launch-week-iii-day-2-announcing-fire-1
+- Jina ReaderLM-v2: https://jina.ai/news/readerlm-v2-frontier-small-language-model-for-html-to-markdown-and-json/
+- Context7 (concorrente refdna, MCP docs): https://github.com/upstash/context7
+- RAG chunking best practices (Weaviate): https://weaviate.io/blog/chunking-strategies-for-rag
+- RAGAS — faithfulness / context recall: https://www.confident-ai.com/blog/rag-evaluation-metrics-answer-relevancy-faithfulness-and-more
+- Estimating Absolute Web Crawl Coverage (arXiv): https://arxiv.org/html/2603.15416
+- Small vs large LLM (classification): https://arxiv.org/html/2510.21443v1
+- llms.txt — stato adozione 2025: https://llms-txt.io/blog/is-llms-txt-dead
+- Firecrawl /extract (task-driven, schema/prompt): https://www.ycombinator.com/launches/Mcn-extract-by-firecrawl-get-structured-website-data-with-just-a-prompt
+- ScrapeGraphAI (LLM scraping da prompt): https://github.com/ScrapeGraphAI/Scrapegraph-ai
+- SWDE — benchmark estrazione strutturata cross-sito: https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/swde/README.md
+- Task Mode — filtraggio task-specifico (arXiv): https://arxiv.org/pdf/2507.14769
+
+---
+
+_Ultimo aggiornamento: 2026-07-01. sagecrawl è uno strumento GENERALE (refdna è solo un
+consumatore) — vedi "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che
+implementi, e segna le decisioni prese sotto ogni item._
