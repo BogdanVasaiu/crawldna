@@ -22,8 +22,9 @@ const bytesOf = (s) => Buffer.byteLength(s || '', 'utf8');
  * failure we follow everything rather than risk dropping a page. The cache lives
  * on the current scan, not the run, so a link rejected for one link's task is
  * not wrongly skipped for another link with a different task.
+ * (Exported for the test suite; the crawl only reaches it via crawlPageWithEngine.)
  */
-async function decideFollow(ctx, task, candidateObjs) {
+export async function decideFollow(ctx, task, candidateObjs) {
   const cacheHost = ctx.currentScan || ctx;
   if (!cacheHost._followCache) cacheHost._followCache = new Map();
   const cache = cacheHost._followCache;
@@ -63,21 +64,25 @@ async function decideFollow(ctx, task, candidateObjs) {
   }
 
   if (toJudge.length) {
-    // Rank by relevance so that if aiSelectLinks caps the list (it slices to 160), the
-    // MOST on-task links are the ones actually judged — a relevant page is never lost to
-    // an arbitrary cap. Safe in default mode too (pure reordering of the model input).
+    // Rank by relevance so the MOST on-task links are judged first. Then judge EVERY
+    // candidate in batches of aiSelectLinks' cap (160): a page can carry more links than
+    // one call fits, and a candidate the model never saw must not be recorded as
+    // rejected — that would silently drop its page for the whole scan (rule #1).
     const ranked = [...toJudge].sort((a, b) => scoreOf.get(b.href) - scoreOf.get(a.href));
-    let chosen;
-    try {
-      chosen = await aiSelectLinks({ llm: ctx.options.llm, task, links: ranked });
-    } catch {
-      chosen = ranked.map((c) => c.href); // completeness bias on failure
-    }
-    const chosenSet = new Set(chosen);
-    for (const c of toJudge) {
-      const follow = chosenSet.has(c.href);
-      cache.set(c.href, follow);
-      if (follow) keep.push(c.href);
+    for (let i = 0; i < ranked.length; i += 160) {
+      const batch = ranked.slice(i, i + 160);
+      let chosen;
+      try {
+        chosen = await aiSelectLinks({ llm: ctx.options.llm, task, links: batch });
+      } catch {
+        chosen = batch.map((c) => c.href); // completeness bias on failure
+      }
+      const chosenSet = new Set(chosen);
+      for (const c of batch) {
+        const follow = chosenSet.has(c.href);
+        cache.set(c.href, follow);
+        if (follow) keep.push(c.href);
+      }
     }
   }
 
@@ -136,7 +141,7 @@ export async function crawlPageWithEngine(target, ctx) {
     return staticFallback(target, ctx);
   }
 
-  const { page, context } = pageCtx;
+  const { page, release } = pageCtx;
   const popups = new Set();
   page.on('popup', (p) => {
     try {
@@ -179,10 +184,9 @@ export async function crawlPageWithEngine(target, ctx) {
     revealed = await revealAll(page, ctx, url, task);
   } catch (err) {
     ctx.emit({ type: 'error', url, message: 'render failed: ' + (err && err.message) });
-    await context.close().catch(() => {});
-    return staticFallback(target, ctx);
+    return staticFallback(target, ctx); // `release()` runs in finally before we return
   } finally {
-    await context.close().catch(() => {});
+    await release(); // close the page and return the context to the pool for reuse
   }
 
   if (revealed.hitCap) {

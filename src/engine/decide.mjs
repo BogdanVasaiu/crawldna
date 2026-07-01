@@ -43,7 +43,6 @@ const SCHEMAS = {
   reveal: { type: 'object', properties: { click: { type: 'array', items: { type: 'integer' } } }, required: ['click'], additionalProperties: false },
   links: { type: 'object', properties: { follow: { type: 'array', items: { type: 'integer' } } }, required: ['follow'], additionalProperties: false },
   keep: { type: 'object', properties: { keep: { type: 'array', items: { type: 'integer' } } }, required: ['keep'], additionalProperties: false },
-  relevant: { type: 'object', properties: { relevant: { type: 'boolean' } }, required: ['relevant'], additionalProperties: false },
   plan: { type: 'object', properties: { direction: { type: ['integer', 'null'] }, target: { type: ['string', 'null'] } }, required: ['direction', 'target'], additionalProperties: false },
 };
 
@@ -246,7 +245,7 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
 
   let ans;
   try {
-    ans = await chat(llm, system, user);
+    ans = await chat(llm, system, user, null, 'reshape');
   } catch (err) {
     // Surface the real reason (bad key, unreachable URL, unknown model) — this is
     // a user-facing chat turn, not a silent crawl decision.
@@ -289,21 +288,12 @@ export async function aiScopeContent({ llm, task, title, markdown }) {
 
   const sections = sectionize(markdown);
   if (sections.length <= 1) {
-    // Single blob: ask only whether it is relevant at all.
-    const ans = await chat(
-      llm,
-      'You decide whether a web page is relevant to a user extraction task. Answer with JSON only.',
-      `Task: "${task}"\nPage title: ${title || ''}\n\nContent (truncated):\n${markdown.slice(0, 2500)}\n\n` +
-        'Reply with {"relevant": true|false}. Relevant means the page contains content the task asks for.',
-      SCHEMAS.relevant,
-    ).catch(() => '');
-    const j = parseJson(ans);
-    // Drop the page ONLY when it is both judged irrelevant AND thin. A substantial
-    // page is never thrown away on a single relevance guess — the default is to
-    // EXTRACT EVERYTHING; narrowing to the task is the job of section-scoping below
-    // and of Phase 2 (reshape). This also avoids nuking a dynamic page whose target
-    // slice (e.g. a calendar month) hadn't been judged present at a glance.
-    if (j && j.relevant === false && markdown.length < 600) return { markdown: '', relevant: false };
+    // Single blob: keep it whole, no model call. The only thing a relevance verdict
+    // could do here is DROP the page, and the drop-guard was "irrelevant AND thin
+    // (< 600 chars)" — unreachable, since everything under 1200 chars already
+    // returned above. So the call could never change the outcome; it only burned
+    // one scope call per single-section page. Narrowing a kept page to the task is
+    // the job of section-scoping below and of Phase 2 (reshape).
     return { markdown, relevant: true };
   }
 
@@ -321,6 +311,7 @@ export async function aiScopeContent({ llm, task, title, markdown }) {
     `Task: "${task}"\nPage title: ${title || ''}\n\nSections (index: heading — preview):\n${outline}\n\n` +
       'Reply with {"keep": [list of section indexes to keep]}.',
     SCHEMAS.keep,
+    'scope',
   ).catch(() => '');
 
   const j = parseJson(ans);
@@ -365,13 +356,18 @@ export async function aiSelectLinks({ llm, task, links }) {
     `Task: "${task}"\n\nDestinations (index: label — href):\n${list}\n\n` +
       'Reply with {"follow": [indexes to follow]}. Include every real, on-task page; exclude same-page anchors and off-task links.',
     SCHEMAS.links,
+    'links',
   ).catch(() => '');
 
   const j = parseJson(ans);
   if (!j || !Array.isArray(j.follow)) return capped.map((l) => l.href); // follow all in-scope on failure
-  const idx = new Set(j.follow.map(Number).filter((n) => Number.isInteger(n)));
-  const chosen = capped.filter((_, i) => idx.has(i)).map((l) => l.href);
-  return chosen.length ? chosen : capped.map((l) => l.href);
+  const idx = new Set(j.follow.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < capped.length));
+  // A non-empty answer whose indexes are ALL out of range is garbage → treat as failure.
+  // A well-formed EMPTY list is a legitimate verdict ("none of these are on-task pages")
+  // and must be honoured — overriding it to follow-all is what sent crawls wandering
+  // through 160 off-task links whenever a page had nothing worth following.
+  if (j.follow.length && idx.size === 0) return capped.map((l) => l.href);
+  return capped.filter((_, i) => idx.has(i)).map((l) => l.href);
 }
 
 /**
@@ -425,6 +421,7 @@ export async function aiPlanNavigation({ llm, task, current = {}, controls = [] 
       `Controls on the page (index: [kind] "label"):\n${lines}\n\n` +
       'Reply with {"direction": <index or null>, "target": "<text that marks the target view, or null>"}.',
     SCHEMAS.plan,
+    'nav-plan',
   ).catch(() => '');
 
   const j = parseJson(ans);
@@ -483,6 +480,7 @@ export async function aiSelectRevealers({ llm, task, candidates }) {
       `Controls (index: [kind] "label" .class — context):\n${lines}\n\n` +
       'Reply with {"click":[indexes of controls that reveal hidden content]}.',
     SCHEMAS.reveal,
+    'reveal',
   ).catch(() => '');
 
   const j = parseJson(ans);
