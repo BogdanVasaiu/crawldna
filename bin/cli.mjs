@@ -4,7 +4,7 @@
 import { parseArgs } from 'node:util';
 import { readFile, stat } from 'node:fs/promises';
 import process from 'node:process';
-import { crawlDocs, DEFAULT_OPTIONS } from '../src/index.mjs';
+import { crawlDocs, resumeCrawl, DEFAULT_OPTIONS } from '../src/index.mjs';
 import { listRuns, deleteRun, deleteAllRuns, cacheRoot } from '../src/lib/runs.mjs';
 
 const C = {
@@ -25,6 +25,7 @@ const HELP = `${C.bold}sagecrawl${C.reset} — general, task-driven web crawler 
 Usage:
   sagecrawl <url> [--task "..."]                       crawl one site
   sagecrawl crawl <url> [options]                      crawl one or more sites
+  sagecrawl resume <runId> [options]                   complete an interrupted run (crash/stop)
   sagecrawl reshape <runId> --ask "..."                reshape a saved extraction (Phase 2)
   sagecrawl serve [--port 4000]                        start the optional Web UI (source repo only)
   sagecrawl runs [list|rm <id…>|clear|path]            manage cached runs
@@ -36,7 +37,10 @@ down a \`sagecrawl\` dependency. \`serve\` explains how to get it if it isn't pr
 
 Two phases. The CRAWL extracts what your task asks for, VERBATIM — one faithful
 .md per link (+ manifest.json). Every run is saved automatically to the runs cache
-(${cacheRoot()}).
+(${cacheRoot()}), and every kept page is journaled to disk AS IT IS CAPTURED — a
+crash or Ctrl-C never loses extracted content: \`sagecrawl resume <runId>\` completes
+the run from where it stopped (flags override the saved options; an API key is
+never stored, so pass --api-key or set the env var again when resuming).
 RESHAPE is separate and optional: turn that extraction into tables, splits or
 filtered subsets with \`sagecrawl reshape <runId> --ask "…"\` (or Reshape in the Web
 UI). It works over the saved files, as many times as you like — crawl once,
@@ -196,6 +200,11 @@ function renderEvent(ev) {
         `  ${c(C.green, '✓')} ${ev.title || '(untitled)'} ${c(C.dim, `(${ev.bytes}b) ${ev.url}`)}\n`,
       );
       break;
+    case 'resume':
+      process.stdout.write(
+        `  ${c(C.cyan, 'resume')} ${c(C.dim, `${ev.restored} page(s) restored from the journal — not re-crawled`)}\n`,
+      );
+      break;
     case 'saved': {
       const nFiles = (ev.scans || []).reduce((n, s) => n + (s.files || []).length, 0);
       process.stdout.write(
@@ -225,20 +234,11 @@ function renderEvent(ev) {
   }
 }
 
-async function runCrawl(values, positionals) {
-  const targets = await buildTargets(values, positionals);
-  if (!targets.length) {
-    process.stderr.write(c(C.red, 'No targets given.\n\n'));
-    process.stdout.write(HELP);
-    process.exitCode = 1;
-    return;
-  }
-
-  const options = optionsFromFlags(values);
-  const run = crawlDocs(targets, options);
-
+// Drive a live run (fresh or resumed): render its events, handle Ctrl-C
+// gracefully, print the final summary. Shared by `crawl` and `resume`.
+async function driveRun(run) {
   const onSigint = () => {
-    process.stdout.write(c(C.yellow, '\nStopping (graceful)…\n'));
+    process.stdout.write(c(C.yellow, '\nStopping (graceful)… the run stays resumable: sagecrawl resume <runId>\n'));
     run.stop();
   };
   process.on('SIGINT', onSigint);
@@ -273,6 +273,38 @@ async function runCrawl(values, positionals) {
       );
     }
   }
+}
+
+async function runCrawl(values, positionals) {
+  const targets = await buildTargets(values, positionals);
+  if (!targets.length) {
+    process.stderr.write(c(C.red, 'No targets given.\n\n'));
+    process.stdout.write(HELP);
+    process.exitCode = 1;
+    return;
+  }
+
+  await driveRun(crawlDocs(targets, optionsFromFlags(values)));
+}
+
+// Complete an interrupted run (#13): restore its journaled pages, re-seed the
+// frontier and crawl only what is missing — into the SAME run folder.
+async function resumeCommand(args, values) {
+  const runId = args[0];
+  if (!runId) {
+    process.stderr.write(c(C.red, 'Usage: sagecrawl resume <runId> [options]\n'));
+    process.exitCode = 1;
+    return;
+  }
+  let run;
+  try {
+    run = await resumeCrawl(runId, optionsFromFlags(values));
+  } catch (err) {
+    process.stderr.write(c(C.red, 'resume failed: ' + (err && err.message ? err.message : err) + '\n'));
+    process.exitCode = 1;
+    return;
+  }
+  await driveRun(run);
 }
 
 // Phase 2 — reshape a saved extraction into new files, on demand.
@@ -381,7 +413,15 @@ async function runsCommand(args, values) {
   for (const r of runs) {
     const scans = r.scans || [];
     const nFiles = scans.reduce((n, s) => n + (s.files || []).length, 0);
-    process.stdout.write(`  ${c(C.cyan, r.id)}  ${c(C.dim, fmtDate(r.createdAt))}\n`);
+    // 'running' = crashed mid-crawl (or still crawling elsewhere); 'stopped' =
+    // voluntary Stop. Both keep their journal and can be completed with resume.
+    const status =
+      r.status === 'running'
+        ? '  ' + c(C.yellow, `⏸ interrupted — resume: sagecrawl resume ${r.id}`)
+        : r.status === 'stopped'
+          ? '  ' + c(C.yellow, `⏸ stopped — resume: sagecrawl resume ${r.id}`)
+          : '';
+    process.stdout.write(`  ${c(C.cyan, r.id)}  ${c(C.dim, fmtDate(r.createdAt))}${status}\n`);
     process.stdout.write(`    ${r.pages} page(s) · ${scans.length} link(s) → ${nFiles} file(s)\n`);
     for (const s of scans) {
       const files = (s.files || []).map((f) => f.filename).join(', ');
@@ -461,6 +501,11 @@ async function main() {
 
   if (positionals[0] === 'reshape') {
     await reshapeCommand(positionals.slice(1), values);
+    return;
+  }
+
+  if (positionals[0] === 'resume') {
+    await resumeCommand(positionals.slice(1), values);
     return;
   }
 

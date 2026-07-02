@@ -1,8 +1,9 @@
 // Web UI server (§8): a tiny node:http server, no framework.
 //   GET  /         -> ui/index.html
 //   POST /start    -> { targets, options } -> start a crawl via the core
+//   POST /resume   -> { runId, options? }  -> complete an interrupted run (#13)
 //   GET  /events   -> Server-Sent Events stream of core events (§6)
-//   POST /stop     -> run.stop()
+//   POST /stop     -> run.stop() (the run stays resumable)
 //
 // One active crawl at a time (fine for v1).
 
@@ -11,7 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
-import { crawlDocs } from '../src/index.mjs';
+import { crawlDocs, resumeCrawl } from '../src/index.mjs';
 import { ensureBrowser } from '../src/lib/browser.mjs';
 import { reshape } from '../src/reshape.mjs';
 import { resolveLlm, listModels } from '../src/lib/llm.mjs';
@@ -107,7 +108,22 @@ async function handleStart(req, res) {
     return json(res, 400, { error: 'no targets' });
   }
 
-  // Stop any in-flight crawl, then start fresh.
+  const run = crawlDocs(targets, {
+    ...options,
+    // The Web UI is an app: always persist so History and Reshape work. The cache
+    // is rooted at the server's cwd by default (library callers save only on opt-in).
+    save: true,
+    onEvent: wireEvents(),
+  });
+  trackRun(run);
+
+  json(res, 200, { ok: true });
+}
+
+// Stop any in-flight crawl, reset the buffers, and return the onEvent sink that
+// feeds SSE clients + the persisted Activity trace. Shared by /start and /resume
+// (a resumed run already knows its id, so its Activity persists under it).
+function wireEvents(initialRunId = null) {
   if (currentRun) {
     try {
       currentRun.stop();
@@ -117,36 +133,30 @@ async function handleStart(req, res) {
   }
   eventBuffer = [];
   activityTrace = [];
-  let savedRunId = null;
+  let savedRunId = initialRunId;
+  return (ev) => {
+    eventBuffer.push(ev);
+    if (eventBuffer.length > 20000) eventBuffer.shift();
+    const t = traceEvent(ev);
+    if (t) {
+      activityTrace.push(t);
+      // Keep a long history so a reopened large crawl replays its whole Activity
+      // + Tree (the old 4000 cap silently dropped the earliest part of the run).
+      if (activityTrace.length > 20000) activityTrace.shift();
+    }
+    if (ev.type === 'saved' && ev.runId) savedRunId = ev.runId;
+    // Persist the timeline once the run is saved so a finished/reopened run can
+    // replay its Activity + Tree (best-effort: never let this break the crawl).
+    if ((ev.type === 'saved' || ev.type === 'done') && savedRunId) {
+      saveActivity(savedRunId, activityTrace).catch(() => {});
+    }
+    broadcast(ev);
+  };
+}
 
-  const run = crawlDocs(targets, {
-    ...options,
-    // The Web UI is an app: always persist so History and Reshape work. The cache
-    // is rooted at the server's cwd by default (library callers save only on opt-in).
-    save: true,
-    onEvent: (ev) => {
-      eventBuffer.push(ev);
-      if (eventBuffer.length > 20000) eventBuffer.shift();
-      const t = traceEvent(ev);
-      if (t) {
-        activityTrace.push(t);
-        // Keep a long history so a reopened large crawl replays its whole Activity
-        // + Tree (the old 4000 cap silently dropped the earliest part of the run).
-        if (activityTrace.length > 20000) activityTrace.shift();
-      }
-      if (ev.type === 'saved' && ev.runId) savedRunId = ev.runId;
-      // Persist the timeline once the run is saved so a finished/reopened run can
-      // replay its Activity + Tree (best-effort: never let this break the crawl).
-      if ((ev.type === 'saved' || ev.type === 'done') && savedRunId) {
-        saveActivity(savedRunId, activityTrace).catch(() => {});
-      }
-      broadcast(ev);
-    },
-  });
+// Await the run's end to clear `currentRun` (onEvent already drives the stream).
+function trackRun(run) {
   currentRun = run;
-
-  // Drain events to drive the buffer/broadcast (onEvent already does the work);
-  // we still await result to clear currentRun when finished.
   run.result
     .then(() => {
       if (currentRun === run) currentRun = null;
@@ -154,8 +164,29 @@ async function handleStart(req, res) {
     .catch(() => {
       if (currentRun === run) currentRun = null;
     });
+}
 
-  json(res, 200, { ok: true });
+// Complete an interrupted run (#13): journaled pages are restored, only the
+// missing ones are crawled, and the output lands in the SAME run folder.
+async function handleResume(req, res) {
+  let payload;
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    return json(res, 400, { error: 'invalid JSON body' });
+  }
+  const { runId, options = {} } = payload || {};
+  if (!runId) return json(res, 400, { error: 'runId is required' });
+
+  let run;
+  try {
+    run = await resumeCrawl(runId, { ...options, onEvent: wireEvents(runId) });
+  } catch (err) {
+    return json(res, 400, { error: String((err && err.message) || err) });
+  }
+  trackRun(run);
+
+  json(res, 200, { ok: true, runId });
 }
 
 function handleEvents(req, res) {
@@ -336,6 +367,7 @@ export async function startServer({ port = 4000, host = '127.0.0.1' } = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/events') return handleEvents(req, res);
       if (req.method === 'POST' && url.pathname === '/start') return handleStart(req, res);
+      if (req.method === 'POST' && url.pathname === '/resume') return handleResume(req, res);
       if (req.method === 'POST' && url.pathname === '/reshape') return handleReshape(req, res);
       if (req.method === 'POST' && url.pathname === '/stop') {
         if (currentRun) currentRun.stop();

@@ -4,17 +4,19 @@
 // independent SCAN, stored in its own subfolder:
 //   <cacheRoot>/<runId>/
 //     manifest.json       full, machine-friendly index (scans[] → files + pages)
-//     run.json            a small summary used to list runs quickly
+//     run.json            a small summary used to list runs quickly; carries a
+//                         status: 'running' → 'done' | 'stopped' (resumable)
 //     <scanId>/           one subfolder per link, e.g. 01-docusaurus-io/
 //       <grouped>.md      that link's AI-grouped Markdown files (lib/layout.mjs)
 //       manifest.json     a self-contained per-scan index
+//       pages.jsonl       incremental journal (#13) while crawling / when interrupted
 //
 // The run is just the container recording which links were crawled together;
 // the user can open one link on its own or the whole run grouped. The cache root
 // defaults to `<project>/.sagecrawl/runs`, overridable with the `cacheDir` option or
 // the SAGECRAWL_CACHE_DIR env var. Runs are kept until explicitly deleted.
 
-import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, writeFile, appendFile, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { writeBundle } from './output.mjs';
 import { slug, hostOf } from './url.mjs';
@@ -62,6 +64,8 @@ function sanitizeOptions(o = {}) {
   const clean = {};
   for (const [k, v] of Object.entries(o)) {
     if (typeof v === 'function') continue; // drop onEvent etc.
+    if (k === 'llm' || k.startsWith('__')) continue; // runtime objects (resolved provider, resume payload)
+    if (k === 'apiKey') continue; // never write a secret to disk; resume re-reads it from flags/env
     if (v instanceof RegExp) clean[k] = v.source;
     else clean[k] = v;
   }
@@ -135,10 +139,11 @@ function buildScanManifest(scan) {
   return m;
 }
 
-function buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens }) {
+function buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens, status }) {
   return {
     runId: id,
     createdAt,
+    status: status || 'done',
     durationMs,
     targets: (targets || []).map((t) => ({ url: t.url, task: t.task })),
     options: sanitizeOptions(options),
@@ -148,10 +153,11 @@ function buildManifest({ id, createdAt, durationMs, targets, options, scans, war
   };
 }
 
-function buildSummary({ id, createdAt, durationMs, scans, warnings, tokens }) {
+function buildSummary({ id, createdAt, durationMs, scans, warnings, tokens, status }) {
   return {
     id,
     createdAt,
+    status: status || 'done',
     durationMs,
     pages: aggregatePages(scans),
     tokens: tokens || aggregateTokens(scans),
@@ -168,18 +174,139 @@ function buildSummary({ id, createdAt, durationMs, scans, warnings, tokens }) {
   };
 }
 
+// --- incremental persistence (#13) ------------------------------------------
+// When saving is on, the crawl journals its state AS IT GOES so a crash (or a
+// voluntary Stop) never loses extracted content:
+//   run.json               written at START by initRun with status 'running'
+//                          (+ targets/options, so a crashed run stays resumable),
+//                          rewritten at the end by saveRun with 'done'/'stopped'
+//   <scanId>/pages.jsonl   one JSON line per KEPT page: { page, links } — verbatim,
+//                          append-only; resume replays it to rebuild the dedup
+//                          state and to re-seed the frontier with the page's links
+// pages.jsonl is deleted on a clean 'done' save (the same pages then live in the
+// consolidated .md); it is KEPT on 'stopped' so the run remains resumable.
+
+/**
+ * Create (or, on resume, re-open) a run folder up front and mark it 'running'.
+ * The original createdAt is preserved when the folder already exists.
+ */
+export async function initRun({ id = null, targets = [], options = {} }) {
+  const runId = id || newRunId();
+  const dir = runDir(runId, options);
+  await mkdir(dir, { recursive: true });
+  let createdAt = new Date().toISOString();
+  try {
+    const prev = JSON.parse(await readFile(path.join(dir, 'run.json'), 'utf8'));
+    if (prev && prev.createdAt) createdAt = prev.createdAt;
+  } catch {
+    /* fresh run */
+  }
+  const summary = {
+    id: runId,
+    createdAt,
+    status: 'running',
+    durationMs: 0,
+    pages: 0,
+    // targets + options make a CRASHED run resumable: with no final manifest yet,
+    // resume reads them from here.
+    targets: (targets || []).map((t) => ({ url: t.url, task: t.task })),
+    options: sanitizeOptions(options),
+    scans: [],
+  };
+  await writeFile(path.join(dir, 'run.json'), JSON.stringify(summary, null, 2) + '\n', 'utf8');
+  return { id: runId, dir, createdAt };
+}
+
+/** Append one kept page ({ page, links }) to a scan's journal. */
+export async function appendJournal(id, scanId, record, opts = {}) {
+  const sid = String(scanId);
+  if (!ID_RE.test(sid)) throw new Error(`invalid scan id: ${sid}`);
+  const dir = path.join(runDir(id, opts), sid);
+  await mkdir(dir, { recursive: true });
+  await appendFile(path.join(dir, 'pages.jsonl'), JSON.stringify(record) + '\n', 'utf8');
+}
+
+/**
+ * Read a scan's journal. A crash can tear the last line mid-write: unparsable
+ * lines are skipped — that page simply gets re-crawled on resume (never lost).
+ */
+export async function readJournal(id, scanId, opts = {}) {
+  const sid = String(scanId);
+  if (!ID_RE.test(sid)) throw new Error(`invalid scan id: ${sid}`);
+  let raw;
+  try {
+    raw = await readFile(path.join(runDir(id, opts), sid, 'pages.jsonl'), 'utf8');
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    try {
+      out.push(JSON.parse(s));
+    } catch {
+      /* torn tail line from a crash — skip; the page will be re-crawled */
+    }
+  }
+  return out;
+}
+
+/**
+ * Load everything resume needs from an interrupted run: its targets, its saved
+ * options and each scan's journaled pages. Prefers the final manifest (a stopped
+ * run wrote one); falls back to the initial run.json (a crashed run didn't).
+ */
+export async function loadRunForResume(id, opts = {}) {
+  const dir = runDir(id, opts);
+  let summary;
+  try {
+    summary = JSON.parse(await readFile(path.join(dir, 'run.json'), 'utf8'));
+  } catch {
+    throw new Error(`run ${id} not found in ${cacheRoot(opts)}`);
+  }
+  let manifest = null;
+  try {
+    manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
+  } catch {
+    /* crashed before the final save — run.json carries targets/options */
+  }
+  const status = summary.status || (manifest && manifest.status) || 'done';
+  const targets = (manifest && manifest.targets) || summary.targets || [];
+  const options = (manifest && manifest.options) || summary.options || {};
+  const journals = {};
+  for (let i = 0; i < targets.length; i++) {
+    const sid = scanIdFor(targets[i].url, i);
+    journals[sid] = await readJournal(id, sid, opts);
+  }
+  return { id, dir, createdAt: summary.createdAt, status, targets, options, journals };
+}
+
 /**
  * Persist a finished run to the cache.
  * @param {object} a
  * @param {Array<{url,task}>} a.targets
  * @param {object} a.options
  * @param {Array} a.scans   per-link scans: { scanId, url, task, title, pages, files, stats, warnings }
+ * @param {string} [a.id]        reuse an existing run folder (incremental runs / resume)
+ * @param {string} [a.createdAt] preserve the original creation time on resume
+ * @param {string} [a.status]    'done' (frontier drained) | 'stopped' (voluntary stop — resumable)
  * @returns {Promise<{ id, dir, manifest, summary }>}
  */
-export async function saveRun({ targets, options, scans = [], durationMs = 0, warnings = [], tokens = null }) {
-  const id = newRunId();
+export async function saveRun({
+  targets,
+  options,
+  scans = [],
+  durationMs = 0,
+  warnings = [],
+  tokens = null,
+  id: existingId = null,
+  createdAt: existingCreatedAt = null,
+  status = 'done',
+}) {
+  const id = existingId || newRunId();
   const dir = runDir(id, options);
-  const createdAt = new Date().toISOString();
+  const createdAt = existingCreatedAt || new Date().toISOString();
 
   await mkdir(dir, { recursive: true });
 
@@ -196,11 +323,19 @@ export async function saveRun({ targets, options, scans = [], durationMs = 0, wa
     });
   }
 
-  const manifest = buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens });
-  const summary = buildSummary({ id, createdAt, durationMs, scans, warnings, tokens });
+  const manifest = buildManifest({ id, createdAt, durationMs, targets, options, scans, warnings, tokens, status });
+  const summary = buildSummary({ id, createdAt, durationMs, scans, warnings, tokens, status });
 
   await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   await writeFile(path.join(dir, 'run.json'), JSON.stringify(summary, null, 2) + '\n', 'utf8');
+
+  // A clean 'done' save supersedes the incremental journal (the same pages now live
+  // in the consolidated files); a 'stopped' run keeps its journal so resume works.
+  if (status === 'done') {
+    for (const scan of scans) {
+      await rm(path.join(dir, String(scan.scanId), 'pages.jsonl'), { force: true }).catch(() => {});
+    }
+  }
 
   return { id, dir, manifest, summary };
 }
@@ -224,6 +359,7 @@ function legacyScan({ url, task, pages, files, stats, warnings }) {
 }
 
 function normalizeManifest(m) {
+  if (!m.status) m = { ...m, status: 'done' }; // pre-#13 runs are complete by construction
   if (Array.isArray(m.scans)) return m;
   const t = (m.targets && m.targets[0]) || {};
   const scan = buildScanManifest(
@@ -240,6 +376,7 @@ function normalizeManifest(m) {
 }
 
 function normalizeSummary(s) {
+  if (!s.status) s = { ...s, status: 'done' }; // pre-#13 runs are complete by construction
   if (Array.isArray(s.scans)) return s;
   const t = (s.targets && s.targets[0]) || {};
   return {

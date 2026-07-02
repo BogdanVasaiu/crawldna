@@ -93,8 +93,8 @@ is just a **consumer** of `crawlDocs`. No crawling logic lives outside the core.
 All three faces call the same core, [`crawlDocs`](src/index.mjs):
 
 - **CLI** — [`bin/cli.mjs`](bin/cli.mjs). `sagecrawl <url> --task "..."`, plus
-  `serve` (Web UI) and `runs` (cache management). Renders the event stream to the
-  terminal.
+  `resume` (complete an interrupted run), `serve` (Web UI) and `runs` (cache
+  management). Renders the event stream to the terminal.
 - **Web UI** — [`ui/server.mjs`](ui/server.mjs) + [`ui/index.html`](ui/index.html).
   A `node:http` server with Server-Sent Events for live progress and a small REST
   surface over the runs cache.
@@ -316,17 +316,38 @@ directory** (`<cwd>/.sagecrawl/runs/`), overridable with `cacheDir` / `--cache-d
 ├── 01-example-com/             # one subfolder per scan
 │   ├── documentation.md        # the crawl's consolidated, verbatim .md
 │   ├── manifest.json           # this scan's files + metadata
+│   ├── pages.jsonl             # incremental journal — present while crawling /
+│   │                           # when interrupted; deleted on a clean finish
 │   └── chat/                   # Phase 2 (reshape) outputs — created on first use
 │       ├── session.json        # the reshape conversation + produced-file registry
 │       └── prices.md           # a derived file
 ├── manifest.json               # run-level manifest
-└── run.json                    # run summary (id, createdAt, pages, scans[…])
+└── run.json                    # run summary (id, createdAt, status, pages, scans[…])
 ```
 
+### Incremental persistence & resume
+
+When saving is on, the run folder is created **up front** (`run.json` with
+`status: 'running'`, plus the targets and options), and **every kept page is
+appended to `pages.jsonl` the moment it is captured** — verbatim, together with
+the links it discovered. A crash (or Ctrl-C) therefore never loses extracted
+content: the run stays listed with its journal intact (`status` stays `running`
+after a kill, becomes `stopped` after a graceful stop).
+
+`resumeCrawl(runId)` (CLI: `sagecrawl resume <runId>`, UI: `POST /resume`)
+replays the journal: restored pages go straight into the result (never
+re-rendered), their content hashes rebuild the dedup state, their URLs become
+pre-visited, and their recorded links re-seed the frontier — so the crawl
+completes exactly what was missing, into the same run folder. A clean finish
+writes `status: 'done'` and removes the journal (the same pages now live in the
+consolidated files). When saving is off nothing is ever written — the library
+contract is unchanged.
+
 `runs.mjs` also provides `listRuns`, `getRun`, `readRunFile`, `deleteRun`,
-`deleteAllRuns`, plus the reshape helpers `getChatSession` / `saveChatSession` /
-`writeChatFile` / `readChatFile` — used by the CLI `runs`/`reshape` subcommands and
-the Web UI.
+`deleteAllRuns`, the journal/resume helpers `initRun` / `appendJournal` /
+`readJournal` / `loadRunForResume`, plus the reshape helpers `getChatSession` /
+`saveChatSession` / `writeChatFile` / `readChatFile` — used by the CLI
+`runs`/`resume`/`reshape` subcommands and the Web UI.
 
 ---
 
@@ -392,7 +413,8 @@ as you like. The only non-verbatim step, and it never touches the crawl's files.
 Consumers iterate the run for live progress. Event types:
 
 `site` · `strategy` · `discover` · `page` · `action` (click/expand/follow) ·
-`extracted` · `progress` · `warn` · `error` · `saved` · `done`.
+`extracted` · `resume` (pages restored from an interrupted run's journal) ·
+`progress` · `warn` · `error` · `saved` · `done`.
 
 Each event is stamped with the active `scanId`/`scanIndex` so a UI can route it to
 the right link.

@@ -106,7 +106,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 
 | # | Titolo | Effetto | Sforzo | Stato |
 |---|--------|---------|--------|-------|
-| 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ☐ da fare |
+| 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ✅ fatto (2026-07-02) |
 | 14 | Politeness opt-in (delay per host + robots.txt) | affidabilità / reputazione | Basso-Medio | ☐ da fare |
 | 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ☐ da fare |
 | 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ☐ da fare |
@@ -769,7 +769,47 @@ generale); misurazione coverage (sitemap-coverage / golden set; la coverage asso
 ---
 
 ## #13 — Persistenza incrementale + resume del crawl
-**Effetto:** affidabilità (un crash non perde più nulla) · **Sforzo:** Medio-Alto · **Stato:** ☐
+**Effetto:** affidabilità (un crash non perde più nulla) · **Sforzo:** Medio-Alto · **Stato:** ✅ FATTO (2026-07-02)
+
+> **Implementato**, tutti e cinque i punti della proposta:
+> - **Run folder subito** ([runs.mjs](src/lib/runs.mjs) `initRun`): con save on, `run.json`
+>   nasce all'avvio con `status:'running'` + targets + opzioni (così un run ucciso resta
+>   listato E resumabile). Igiene contestuale in `sanitizeOptions`: `apiKey`/`llm`/`__*`
+>   non finiscono MAI più su disco (né in run.json né nel manifest).
+> - **Journal append-only** (`appendJournal`/`readJournal`): in `ctx.addPage` ogni pagina
+>   tenuta è appesa a `<scanId>/pages.jsonl` NEL MOMENTO in cui è catturata — record
+>   `{ page, links }` verbatim, con i link scoperti dalla pagina (servono al resume per
+>   ri-seminare la frontiera: senza, le pagine raggiungibili solo attraverso una pagina
+>   già tenuta non si ritroverebbero mai). Append serializzati con una promise-chain
+>   (i worker concorrenti non possono intrecciare le righe) e flushati prima del save
+>   finale; in lettura una riga strappata da un crash a metà scrittura viene saltata
+>   (quella pagina si ri-crawla, mai persa). Errore di journaling = warn, il crawl
+>   continua in memoria.
+> - **Fine run**: `saveRun` riusa id/createdAt del folder e scrive `status:'done'`
+>   (frontiera esaurita — journal eliminato, il contenuto vive nei file consolidati) o
+>   `'stopped'` (Stop volontario — journal CONSERVATO, run resumabile). Il consolidato
+>   è assemblato dalla RAM come oggi (deliberato: se il disco avesse perso un append,
+>   leggere da disco perderebbe pagine che la RAM ha — regola #1; il journal è la rete
+>   anti-crash, non la fonte di verità di un run sano).
+> - **`resumeCrawl(runId)`** ([index.mjs](src/index.mjs)) = CLI `sagecrawl resume <runId>`
+>   + UI `POST /resume`: rilegge run.json/manifest (opzioni+targets salvati, override da
+>   flag), rigioca il journal — pagine ripristinate verbatim nel risultato (mai
+>   ri-renderizzate), hash dedup ricostruiti con la STESSA `pageSignature` condivisa con
+>   addPage, URL pre-visitati, link registrati → semi della frontiera — e completa nello
+>   STESSO folder. Evento `resume` (`restored: N`) per CLI/UI; `sagecrawl runs` marca i
+>   run interrotti/fermati come resumabili. Un run `done` non si resuma (errore chiaro).
+> - **Contratto libreria invariato**: senza `save`/`cacheDir` zero scritture (testato).
+>
+> **Criterio di accettazione verificato** ([test/resume.test.mjs](test/resume.test.mjs),
+> 7 test, 104 totali, offline con sito stub locale + browser 'never'): run interrotto a
+> metà → journal su disco leggibile (pagina verbatim + link); `resume` completa e
+> l'output è **identico** (stesso set pagine, stesso markdown) a un run mai interrotto;
+> variante crash (status 'running', manifest assente, riga journal strappata) idem;
+> zero scritture con save off. _Limiti onesti:_ token/durationMs del tratto pre-crash
+> non si recuperano (contavano in RAM); nessun lockfile → resumare un run mentre gira
+> ancora altrove non è rilevato; le pagine visitate-ma-non-tenute si ri-visitano al
+> resume (corretto ma un po' di lavoro rifatto — il journal registra solo ciò che è
+> tenuto, come da proposta).
 
 **Problema oggi.** `saveRun` ([src/lib/runs.mjs](src/lib/runs.mjs)) scrive TUTTO solo a
 fine run e le pagine vivono in RAM fino ad allora: un crash (o kill, o blackout) alla

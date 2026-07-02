@@ -86,6 +86,7 @@ sagecrawl crawl <url> [--task "..."] [--model qwen3-coder:30b]
                     [--browser auto|never|always] [--concurrency 4]
                     [--include "..."] [--exclude "..."] [--max-pages 0]
                     [--cache-dir <dir>]
+sagecrawl resume <runId>                             # complete an interrupted run (crash/stop)
 sagecrawl reshape <runId> --ask "..."                # reshape a saved extraction (Phase 2)
 sagecrawl runs [list|rm <id…>|clear|path]            # manage cached runs
 sagecrawl serve [--port 4000]                        # start the Web UI
@@ -97,6 +98,21 @@ rooted at the directory you run from, overridable with `--cache-dir` or the
 `SAGECRAWL_CACHE_DIR` env var) — there is no `--out` flag. Each run is one folder: the
 grouped Markdown file(s), a `manifest.json`, and a small `run.json` summary.
 *(As a **library**, saving is opt-in — see [Library API](#library-api).)*
+
+**A crash never loses extracted content.** While the crawl runs, every kept page is
+also journaled to disk *as it is captured* (`<scanId>/pages.jsonl`, append-only,
+verbatim). If the process dies — or you stop it with Ctrl-C — the run stays in the
+cache as *resumable* (`sagecrawl runs` marks it), and
+
+```sh
+sagecrawl resume <runId>          # restores the journaled pages (not re-crawled),
+                                  # re-seeds the frontier from their recorded links,
+                                  # and completes the run into the SAME folder
+```
+
+Flags override the run's saved options (e.g. `--concurrency`). An API key is never
+written to disk, so with `--provider openai` pass `--api-key` again or set the env
+var. A run that finished normally can't be resumed (there's nothing left to do).
 
 **Per-link tasks** — either repeated pairs:
 

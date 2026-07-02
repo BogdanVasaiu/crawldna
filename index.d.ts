@@ -83,6 +83,7 @@ export type EventType =
   | 'page'
   | 'action'
   | 'extracted'
+  | 'resume'
   | 'progress'
   | 'warn'
   | 'error'
@@ -240,8 +241,20 @@ export declare function normalizeTargets(targets: Targets, defaultTask?: string)
  * Crawl one or more links, each with a natural-language task, and return a
  * {@link Run}. The crawl renders pages in a real browser, reveals interaction-
  * hidden content, and extracts task-relevant Markdown verbatim. Nothing is written
- * to disk unless `save: true` or a `cacheDir` is given.
+ * to disk unless `save: true` or a `cacheDir` is given. When saving is on, every
+ * kept page is also journaled to disk as it is captured, so an interrupted run
+ * can be completed later with {@link resumeCrawl}.
  */
 export declare function crawlDocs(targets: Targets, options?: CrawlOptions): Run;
+
+/**
+ * Resume an interrupted saved run: pages already extracted are restored verbatim
+ * from the run's incremental journal (never re-rendered), their recorded links
+ * re-seed the frontier, and the crawl completes into the same run folder.
+ * `overrides` are merged over the run's saved options. An API key is never
+ * persisted — for `provider: "openai"` pass `apiKey` again (or set the env var).
+ * Rejects if the run is already complete.
+ */
+export declare function resumeCrawl(runId: string, overrides?: CrawlOptions): Promise<Run>;
 
 export default crawlDocs;

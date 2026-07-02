@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { runDocsProfile } from './profiles/docs.mjs';
 import { crawlPageWithEngine } from './engine/crawl-page.mjs';
 import { assembleScan, assemblePerDocument } from './lib/layout.mjs';
-import { saveRun, scanIdFor } from './lib/runs.mjs';
+import { saveRun, scanIdFor, initRun, appendJournal, loadRunForResume, cacheRoot } from './lib/runs.mjs';
 import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf } from './lib/url.mjs';
 import { isDocsTask } from './lib/task.mjs';
@@ -60,6 +60,20 @@ export const DEFAULT_OPTIONS = {
   // lose content"; the default drops NOTHING beyond exact duplicates. 3 ≈ Manku/Google.
   onEvent: undefined,
 };
+
+/**
+ * The content signature addPage dedups on: links/URLs/whitespace stripped, then
+ * lowercased. Shared with the resume replay (#13) so a restored run recognises
+ * its own pages — the two MUST stay byte-identical or resume would re-keep them.
+ */
+export function pageSignature(markdown) {
+  return String(markdown || '')
+    .replace(/!?\[[^\]]*\]\([^)]*\)/g, '') // drop links/images entirely
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
 
 /** Normalise the `targets` argument (§5) into `[{ url, task }]`. */
 export function normalizeTargets(targets, defaultTask) {
@@ -135,10 +149,43 @@ export function crawlDocs(targets, options = {}) {
   // provider-agnostic (Ollama or any OpenAI-compatible API).
   opts.llm = resolveLlm(opts);
 
+  // Resume payload (#13), set only by resumeCrawl: { id, journals } — the run id to
+  // re-open and each scan's already-journaled pages. Internal; never a public option.
+  const resume = opts.__resume || null;
+
   // Persistence is opt-in (see DEFAULT_OPTIONS.save): write a run to the cache only
   // when the caller asked — explicitly via `save`, or implicitly by naming a place
   // to put it (`cacheDir` / SAGECRAWL_CACHE_DIR). Otherwise the crawl stays in memory.
-  const willSave = opts.save === true || !!opts.cacheDir || !!process.env.SAGECRAWL_CACHE_DIR;
+  const willSave = opts.save === true || !!opts.cacheDir || !!process.env.SAGECRAWL_CACHE_DIR || !!resume;
+
+  // Incremental journal (#13): when saving is on, every kept page is appended to
+  // <run>/<scanId>/pages.jsonl AS IT IS CAPTURED, so a crash (or Stop) at hour 4 of
+  // a 5-hour crawl loses nothing. Appends are serialised through a promise chain
+  // (concurrent workers must not interleave lines) and flushed before the final
+  // save. Zero writes when saving is off — the library contract is unchanged.
+  const journal = {
+    id: null, // set once initRun has created the run folder; null = journaling off
+    createdAt: null,
+    queue: Promise.resolve(),
+    warned: false,
+    append(scanId, record) {
+      if (!this.id) return;
+      this.queue = this.queue
+        .then(() => appendJournal(this.id, scanId, record, opts))
+        .catch((err) => {
+          if (!this.warned) {
+            this.warned = true;
+            emit({
+              type: 'warn',
+              reason: 'journal',
+              message:
+                'Failed to journal a page to disk (' + (err && err.message) + '). The crawl ' +
+                'continues in memory, but a crash before the final save would lose pages.',
+            });
+          }
+        });
+    },
+  };
 
   const list = normalizeTargets(targets, opts.task);
   const stream = createEventStream();
@@ -170,6 +217,38 @@ export function crawlDocs(targets, options = {}) {
     _hashes: new Set(), // de-dupe pages with identical content, PER scan
     _startedAt: 0,
   }));
+
+  // Resume (#13): replay each scan's journal BEFORE crawling. Restored pages go
+  // straight into the scan (they are part of the final output) and their hashes
+  // into the dedup set; their URLs become pre-visited so they are never re-rendered;
+  // their recorded LINKS re-seed the frontier — without them, pages reachable only
+  // through an already-kept page could never be rediscovered.
+  if (resume && resume.journals) {
+    for (const scan of scans) {
+      const records = resume.journals[scan.scanId];
+      if (!Array.isArray(records) || !records.length) continue;
+      const visited = new Set();
+      const seeds = new Set();
+      for (const rec of records) {
+        const page = rec && rec.page;
+        for (const l of (rec && rec.links) || []) seeds.add(l);
+        if (!page || !page.url || typeof page.markdown !== 'string') continue;
+        const sig = pageSignature(page.markdown);
+        const hash = createHash('sha1').update(sig).digest('hex');
+        visited.add(normalizeUrl(page.url) || page.url);
+        if (scan._hashes.has(hash)) continue; // defensive: a journal shouldn't hold dupes
+        scan._hashes.add(hash);
+        if (opts.nearDupHamming > 0) {
+          if (!scan._simhashes) scan._simhashes = [];
+          scan._simhashes.push(simhash(sig));
+        }
+        scan.pages.push(page);
+        const s = (page.meta && page.meta.strategy) || 'agent';
+        scan.stats.strategyCounts[s] = (scan.stats.strategyCounts[s] || 0) + 1;
+      }
+      scan._resume = { visited, seeds: [...seeds], restored: scan.pages.length };
+    }
+  }
 
   const result = {
     scans,
@@ -234,7 +313,9 @@ export function crawlDocs(targets, options = {}) {
       ctx.progress.done += 1;
       emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total, tokens: { ...result.stats.tokens } });
     },
-    addPage(page) {
+    // `extra.links` (optional) = the page's discovered links, journaled with it so
+    // resume can re-seed the frontier without re-rendering already-kept pages.
+    addPage(page, extra = {}) {
       const scan = ctx.currentScan;
       if (!scan) return;
       if (opts.maxPages > 0 && scan.pages.length >= opts.maxPages) return;
@@ -242,12 +323,7 @@ export function crawlDocs(targets, options = {}) {
       // (the same page reached via throwaway query params like ?version=). The
       // signature ignores link/URL targets so near-identical pages collapse too.
       const md = page.markdown || '';
-      const sig = md
-        .replace(/!?\[[^\]]*\]\([^)]*\)/g, '') // drop links/images entirely
-        .replace(/https?:\/\/\S+/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
+      const sig = pageSignature(md);
       const hash = createHash('sha1').update(sig).digest('hex');
       if (scan._hashes.has(hash)) return;
       scan._hashes.add(hash);
@@ -267,6 +343,9 @@ export function crawlDocs(targets, options = {}) {
       scan.pages.push(page);
       const s = (page.meta && page.meta.strategy) || 'agent';
       scan.stats.strategyCounts[s] = (scan.stats.strategyCounts[s] || 0) + 1;
+      // Incremental persistence (#13): the kept page hits the disk NOW, verbatim,
+      // append-only — a crash from here on cannot lose it. No-op when saving is off.
+      journal.append(scan.scanId, { page, links: extra.links || [] });
       // Note: progress is driven by markProcessed (work done), not by kept pages.
       emit({
         type: 'extracted',
@@ -310,6 +389,23 @@ export function crawlDocs(targets, options = {}) {
     // start a new crawl while the previous one is winding down).
     retainBrowser();
     try {
+      // Create the run folder UP FRONT (#13) so the incremental journal has a home
+      // and a kill -9 leaves a listed, resumable run (status 'running') instead of
+      // nothing. On resume this re-opens the existing folder, preserving createdAt.
+      if (willSave) {
+        try {
+          const init = await initRun({ id: resume ? resume.id : null, targets: list, options: opts });
+          journal.id = init.id;
+          journal.createdAt = init.createdAt;
+        } catch (err) {
+          emit({
+            type: 'warn',
+            reason: 'cache',
+            message: 'Failed to create the run folder: ' + (err && err.message) + '. Crawling in memory only.',
+          });
+        }
+      }
+
       // Health-check the model ONCE before crawling. The judgment calls all
       // `.catch()` and bias toward keep/follow/reveal, so a misconfigured model
       // would silently degrade the whole crawl to heuristics (no AI reveal/scope/
@@ -332,6 +428,9 @@ export function crawlDocs(targets, options = {}) {
         if (stopped) break;
         ctx.beginScan(scan);
         emit({ type: 'site', url: scan.url, task: scan.task, title: scan.title });
+        if (scan._resume && scan._resume.restored) {
+          emit({ type: 'resume', url: scan.url, restored: scan._resume.restored });
+        }
         const target = { url: scan.url, task: scan.task };
         if (isDocsTask(scan.task)) {
           await runDocsProfile(target, ctx);
@@ -393,6 +492,10 @@ export function crawlDocs(targets, options = {}) {
       // folder per run (one subfolder per scan) under the cache root (cwd default).
       if (willSave) {
         try {
+          // Flush the journal before finalising: every append must be on disk
+          // before the manifest claims the run is complete (and before a 'done'
+          // save deletes the journal).
+          await journal.queue.catch(() => {});
           const saved = await saveRun({
             targets: list,
             options: opts,
@@ -400,6 +503,11 @@ export function crawlDocs(targets, options = {}) {
             durationMs: result.stats.durationMs,
             warnings: result.warnings,
             tokens: result.stats.tokens,
+            id: journal.id,
+            createdAt: journal.createdAt,
+            // A voluntary Stop leaves the run resumable ('stopped', journal kept);
+            // a drained frontier is 'done' (journal superseded by the final files).
+            status: stopped ? 'stopped' : 'done',
           });
           result.run = { id: saved.id, dir: saved.dir, scans: saved.summary.scans };
           emit({ type: 'saved', runId: saved.id, dir: saved.dir, scans: saved.summary.scans });
@@ -458,7 +566,11 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
     return true;
   };
 
-  const visited = new Set();
+  // Resume (#13): pages restored from the journal are pre-visited (never re-rendered)
+  // and their recorded links re-seed the frontier below, so the crawl picks up exactly
+  // where it left off — anything not yet kept is reached again through those links.
+  const pre = (ctx.currentScan && ctx.currentScan._resume) || null;
+  const visited = new Set(pre ? pre.visited : undefined);
   const queued = new Set();
   const queue = [];
   // Discovery-only URLs are crawled to harvest their links (e.g. the site root's
@@ -482,13 +594,16 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
 
   enqueue(start);
   for (const s of seeds) enqueue(s);
+  if (pre) for (const s of pre.seeds) enqueue(s);
   // Base the bar on the ACTUAL frontier, not on any earlier setTotal() estimate
   // (e.g. a sitemap's raw count) that may include URLs filtered out at enqueue —
   // an unreachable floor is what left the bar stuck below 100%.
   ctx.progress.total = ctx.progress.done + queue.length;
   ctx.emit({ type: 'progress', done: ctx.progress.done, total: ctx.progress.total });
 
-  let produced = 0;
+  // Restored pages count as production, so a fully-crawled resumed scan doesn't
+  // trigger the root-bootstrap fallback for no reason.
+  let produced = pre ? pre.restored : 0;
   let bootstrapped = false;
   let active = 0; // pages currently being crawled
   const retried = new Set(); // URLs already given their one transient-failure retry
@@ -525,7 +640,9 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
       return;
     }
     if (outcome.page && !discoveryOnly.has(url)) {
-      ctx.addPage(outcome.page);
+      // The page's links travel with it into the journal (#13): resume re-seeds
+      // the frontier from them instead of re-rendering the page to rediscover them.
+      ctx.addPage(outcome.page, { links: outcome.links || [] });
       produced++;
     }
     for (const link of outcome.links || []) enqueue(link);
@@ -579,6 +696,45 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
   }
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
+}
+
+/**
+ * Resume an interrupted run (#13): status 'running' after a crash/kill, or
+ * 'stopped' after a voluntary Stop. Replays the run's incremental journal —
+ * already-extracted pages are restored verbatim (never re-rendered), their
+ * recorded links re-seed the frontier, and the crawl completes into the SAME
+ * run folder. Returns the same async-iterable Run object as {@link crawlDocs}.
+ *
+ * `overrides` are merged over the run's saved options (model, provider,
+ * concurrency, …). An `apiKey` is never persisted, so for `provider: 'openai'`
+ * pass it again here or via SAGECRAWL_API_KEY / OPENAI_API_KEY.
+ *
+ * @param {string} runId
+ * @param {Partial<typeof DEFAULT_OPTIONS>} [overrides]
+ * @returns {Promise<ReturnType<typeof crawlDocs>>}
+ */
+export async function resumeCrawl(runId, overrides = {}) {
+  const state = await loadRunForResume(runId, overrides);
+  if (state.status === 'done') {
+    throw new Error(`run ${runId} is already complete — nothing to resume`);
+  }
+  if (!state.targets.length) {
+    throw new Error(`run ${runId} has no recorded targets (saved before resume support?) — cannot resume`);
+  }
+  const saved = { ...state.options };
+  // Runtime/derived values must be recomputed, never replayed from disk.
+  delete saved.llm;
+  delete saved.onEvent;
+  delete saved.__resume;
+  return crawlDocs(state.targets, {
+    ...saved,
+    ...overrides,
+    save: true,
+    // Pin the cache to where the run was actually found, so the completed run
+    // lands in the same folder even if the caller's cwd changed.
+    cacheDir: cacheRoot(overrides),
+    __resume: { id: state.id, journals: state.journals },
+  });
 }
 
 export default crawlDocs;
