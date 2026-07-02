@@ -1,7 +1,7 @@
 // URL normalisation, scoping and slugs — the dedup/frontier foundation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, resolveUrl, sameSite, inScope, toRegExp, slug, hostOf, originOf, pathOf } from '../src/lib/url.mjs';
+import { normalizeUrl, resolveUrl, sameSite, inScope, toRegExp, slug, hostOf, originOf, pathOf, siblingKey } from '../src/lib/url.mjs';
 
 test('normalizeUrl drops plain in-page anchors but keeps hash routes', () => {
   assert.equal(normalizeUrl('https://ex.com/docs/page#install'), 'https://ex.com/docs/page');
@@ -36,6 +36,33 @@ test('normalizeUrl rejects non-http(s) and unparsable input', () => {
 test('resolveUrl resolves relative hrefs against a base', () => {
   assert.equal(resolveUrl('../other', 'https://ex.com/docs/page'), 'https://ex.com/other');
   assert.equal(resolveUrl('/abs', 'https://ex.com/docs/page'), 'https://ex.com/abs');
+});
+
+test('normalizeUrl rejects a path that BEGINS with another absolute URL (broken join)', () => {
+  // seen live: a broken href resolved to https://0.vuetifyjs.com/https://v0play.vuetifyjs.com (404)
+  assert.equal(normalizeUrl('https://ex.com/https://other.com/page'), null);
+  assert.equal(normalizeUrl('https://ex.com/https:/other.com/page'), null);
+  assert.equal(normalizeUrl('https://ex.com/http%3A%2F%2Fother.com'), null);
+  assert.equal(resolveUrl('/https://other.com', 'https://ex.com/docs'), null);
+  // nested URLs DEEPER in the path (Wayback-style) or in the query are legitimate
+  assert.ok(normalizeUrl('https://web.archive.org/web/2024/https://ex.com/docs'));
+  assert.ok(normalizeUrl('https://ex.com/login?next=https://ex.com/app'));
+});
+
+test('siblingKey groups mirror hosts, query variants and locale twins; keeps real paths apart', () => {
+  assert.equal(siblingKey('https://ex.com/en/docs/setup'), '/docs/setup');
+  assert.equal(siblingKey('https://ex.com/docs/setup'), '/docs/setup'); // locale twin
+  assert.equal(siblingKey('https://dev.ex.com/en/docs/setup'), '/docs/setup'); // mirror host
+  assert.equal(siblingKey('https://ex.com/en/docs/setup?panel=settings'), '/docs/setup'); // UI variant
+  assert.equal(siblingKey('https://ex.com/pt-br/docs/setup'), '/docs/setup'); // regioned locale
+  assert.equal(siblingKey('https://ex.com/zh-hans/docs/setup'), '/docs/setup');
+  // NOT locale segments: digits or 3+ letters stay part of the identity
+  assert.equal(siblingKey('https://ex.com/v3/docs'), '/v3/docs');
+  assert.equal(siblingKey('https://ex.com/api/docs'), '/api/docs');
+  assert.notEqual(siblingKey('https://ex.com/en/docs/setup'), siblingKey('https://ex.com/en/docs/usage'));
+  assert.equal(siblingKey('https://ex.com/'), '/');
+  assert.equal(siblingKey('https://ex.com/en'), '/');
+  assert.equal(siblingKey('not a url'), '');
 });
 
 test('sameSite accepts subdomains of the base, not the reverse', () => {

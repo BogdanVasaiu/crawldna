@@ -46,6 +46,18 @@ export function normalizeUrl(input, base) {
     return null;
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  // A path that BEGINS with another absolute URL (`/https://other.site/…`) is the
+  // signature of a broken join — an absolute href glued onto a base — never a real
+  // route (seen live: https://0.vuetifyjs.com/https://v0play.vuetifyjs.com, a 404).
+  // Only the path PREFIX is rejected: nested URLs deeper in the path (Wayback-style
+  // /web/<ts>/https://…) or in the query (?redirect=https://…) are legitimate.
+  let decodedPath = u.pathname;
+  try {
+    decodedPath = decodeURIComponent(decodedPath);
+  } catch {
+    /* malformed %-escape: judge the raw path */
+  }
+  if (/^\/https?:\//i.test(decodedPath)) return null;
   // Drop a plain in-page anchor; keep a hash ROUTE (#/… or #!…). See note above.
   if (u.hash && !/^#[!/]/.test(u.hash)) u.hash = '';
   u.hostname = u.hostname.toLowerCase();
@@ -108,6 +120,27 @@ export function inScope(url, baseUrl, { include, exclude } = {}) {
 /** Resolve a possibly-relative href against a base URL; null if invalid. */
 export function resolveUrl(href, base) {
   return normalizeUrl(href, base);
+}
+
+/**
+ * Key that groups URL-SIBLINGS: URLs whose path is the same once a leading
+ * locale-like segment (`/en/x`, `/pt-br/x` → `/x`) is stripped — so the same
+ * logical document reached via a mirror host (dev./staging./v2.), a UI-state
+ * query variant (`?panel=settings`), a hash-route twin, or a locale twin all
+ * share one key. Host and query are deliberately ignored: the frontier is
+ * already confined to one site by `inScope`, so a same-key page on another
+ * host is a same-site mirror, not a stranger. Sharing a key is only a HINT —
+ * callers must also check content (SimHash) before treating two pages as
+ * duplicates: e.g. `?version=1` vs `?version=2` share a key but genuinely
+ * differ, and measured Hamming distances keep them apart (see mirrorHamming).
+ */
+export function siblingKey(u) {
+  try {
+    const p = new URL(u).pathname.replace(/\/+$/, '') || '/';
+    return p.replace(/^\/[a-z]{2}(-[a-z0-9]{2,8})?(?=\/|$)/i, '') || '/';
+  } catch {
+    return '';
+  }
 }
 
 /** A filesystem-safe slug derived from arbitrary text. */

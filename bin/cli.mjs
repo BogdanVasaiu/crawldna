@@ -72,9 +72,12 @@ Options:
   --cache-dir <dir>      override the runs-cache location
   --per-document         also emit one identifiable .md per page + index.md + a JSONL
                          (for programmatic use); the consolidated .md is still written
-  --near-dup-hamming <n> collapse near-duplicate pages within this SimHash Hamming
-                         distance (default: ${DEFAULT_OPTIONS.nearDupHamming} = off; exact dupes only). 3 ≈ recommended.
-                         Opt-in: can drop a page whose unique content is small
+  --mirror-hamming <n>   collapse mirror/variant re-servings of a kept page — same
+                         locale-stripped path (mirror host, ?ui-state variant, locale
+                         twin) AND content SimHash within <n> (default: ${DEFAULT_OPTIONS.mirrorHamming}; 0 = off)
+  --near-dup-hamming <n> collapse near-duplicate pages ACROSS different paths within
+                         this SimHash Hamming distance (default: ${DEFAULT_OPTIONS.nearDupHamming} = off).
+                         Opt-in: content similarity alone can drop a real page
   --port <n>             port for \`serve\` (default: 4000)
 
 Reshape (Phase 2 — over a saved run):
@@ -116,6 +119,7 @@ const OPTION_CONFIG = {
   'cache-dir': { type: 'string' },
   'per-document': { type: 'boolean' },
   'near-dup-hamming': { type: 'string' },
+  'mirror-hamming': { type: 'string' },
   port: { type: 'string' },
   ask: { type: 'string' },
   scan: { type: 'string' },
@@ -169,6 +173,7 @@ function optionsFromFlags(values) {
   if (values['cache-dir']) o.cacheDir = values['cache-dir'];
   if (values['per-document']) o.perDocument = true;
   if (values['near-dup-hamming'] != null) o.nearDupHamming = Number(values['near-dup-hamming']);
+  if (values['mirror-hamming'] != null) o.mirrorHamming = Number(values['mirror-hamming']);
   if (values.task && values.task.length === 1) o.task = values.task[0];
   return o;
 }
@@ -226,6 +231,11 @@ function renderEvent(ev) {
         process.stdout.write(`  progress ${ev.done}/${ev.total}\n`);
       }
       break;
+    case 'dedup':
+      process.stdout.write(
+        `  ${c(C.dim, `≡ dup[${ev.kind}] ${ev.url}${ev.of ? ' ≈ ' + ev.of : ''}`)}\n`,
+      );
+      break;
     case 'warn':
       process.stdout.write(`  ${c(C.yellow, '⚠ warn')} ${ev.reason ? '[' + ev.reason + '] ' : ''}${ev.message}\n`);
       break;
@@ -263,6 +273,13 @@ async function driveRun(run) {
     `\n${c(C.bold, 'Summary')}  ${result.stats.pages} page(s) in ${result.stats.durationMs}ms\n`,
   );
   if (parts) process.stdout.write(`  ${c(C.dim, parts)}\n`);
+  const dd = result.stats.deduped || {};
+  const ddTotal = (dd.exact || 0) + (dd.mirror || 0) + (dd.near || 0);
+  if (ddTotal) {
+    process.stdout.write(
+      `  ${c(C.dim, `${ddTotal} duplicate(s) skipped (exact=${dd.exact || 0} mirror=${dd.mirror || 0} near=${dd.near || 0})`)}\n`,
+    );
+  }
   if (result.warnings.length) {
     process.stdout.write(`  ${c(C.yellow, result.warnings.length + ' warning(s)')}\n`);
   }

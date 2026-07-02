@@ -14,7 +14,7 @@ import { crawlPageWithEngine } from './engine/crawl-page.mjs';
 import { assembleScan, assemblePerDocument } from './lib/layout.mjs';
 import { saveRun, scanIdFor, initRun, appendJournal, loadRunForResume, cacheRoot } from './lib/runs.mjs';
 import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
-import { normalizeUrl, inScope, pathOf, originOf, hostOf } from './lib/url.mjs';
+import { normalizeUrl, inScope, pathOf, originOf, hostOf, siblingKey } from './lib/url.mjs';
 import { isDocsTask } from './lib/task.mjs';
 import { resolveLlm, checkModel, abortPendingLlm } from './lib/llm.mjs';
 import { simhash, hamming } from './lib/simhash.mjs';
@@ -58,11 +58,23 @@ export const DEFAULT_OPTIONS = {
   // for programmatic consumers, alongside the consolidated .md. Off by default (the
   // consolidated file is friendlier for a human). Pure repackaging — content stays
   // verbatim, nothing is filtered or transformed. See lib/layout.mjs assemblePerDocument.
-  nearDupHamming: 0, // NEAR-DUP DEDUP (0 = off, exact-only — the safe default). When > 0,
-  // pages whose 64-bit SimHash is within this Hamming distance of an already-kept page are
-  // collapsed as near-duplicates (template-only differences). OPT-IN because collapsing
-  // "almost identical" pages can drop a page whose unique bit is small — against "never
-  // lose content"; the default drops NOTHING beyond exact duplicates. 3 ≈ Manku/Google.
+  nearDupHamming: 0, // CROSS-PATH NEAR-DUP DEDUP (0 = off, exact-only — the safe default).
+  // When > 0, a page whose 64-bit SimHash is within this Hamming distance of ANY already-kept
+  // page is collapsed. OPT-IN because content similarity alone cannot tell a duplicate from a
+  // sibling: measured on a real run (vuetify, 1491 pages), 36 pairs of GENUINELY DISTINCT API
+  // pages sat at distance ≤3 (two at 0 — templated pages whose distinguishing tokens are link
+  // text, which pageSignature strips). Any global threshold would drop real content.
+  mirrorHamming: 8, // MIRROR/VARIANT DEDUP (default ON). Collapse a page only when BOTH
+  // signals agree it is a re-serving of a kept page: (1) its URL is a SIBLING of the kept
+  // page's — same path once a leading locale segment is stripped, so mirror hosts
+  // (dev./staging./v2.), UI-state query variants (?panel=settings) and locale twins
+  // (/en/x vs /x) qualify — and (2) its content SimHash is within this Hamming distance.
+  // The two-signal AND is what makes a default-on setting safe: measured on the same run,
+  // TRUE sibling duplicates cluster at distance ≤8 (72% of 657 pairs; median 4) while
+  // sibling-SHAPED pages with real content differences (release-notes?version=A vs B,
+  // same path on an unrelated product subdomain) start at 10 and sit mostly ≥23. Without
+  // this gate, 57% of that run's pages (and ~35 min of its hour) were mirror re-crawls.
+  // 0 = off. Cross-PATH near-dups are never touched by this tier (see nearDupHamming).
   onEvent: undefined,
 };
 
@@ -147,6 +159,7 @@ export function crawlDocs(targets, options = {}) {
   opts.minRelevance = Math.min(1, Math.max(0, Number(opts.minRelevance) || 0));
   opts.maxRoutes = Math.max(0, Math.floor(Number(opts.maxRoutes) || 0));
   opts.nearDupHamming = Math.min(64, Math.max(0, Math.floor(Number(opts.nearDupHamming) || 0)));
+  opts.mirrorHamming = Math.min(64, Math.max(0, Math.floor(Number(opts.mirrorHamming) || 0)));
   // Size the browser-context pool to the concurrency so each worker keeps (and reuses)
   // its own context — the site's shared CSS/JS is then cached across pages instead of
   // re-downloaded per page. See src/lib/browser.mjs.
@@ -218,9 +231,10 @@ export function crawlDocs(targets, options = {}) {
     pages: [],
     files: [],
     documents: [], // per-page format, populated only when opts.perDocument is on (#10)
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens() },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 } },
     warnings: [],
     _hashes: new Set(), // de-dupe pages with identical content, PER scan
+    _siblings: new Map(), // siblingKey → [{sh, url}] of KEPT pages, for the mirror tier
     _startedAt: 0,
   }));
 
@@ -244,9 +258,20 @@ export function crawlDocs(targets, options = {}) {
         visited.add(normalizeUrl(page.url) || page.url);
         if (scan._hashes.has(hash)) continue; // defensive: a journal shouldn't hold dupes
         scan._hashes.add(hash);
-        if (opts.nearDupHamming > 0) {
-          if (!scan._simhashes) scan._simhashes = [];
-          scan._simhashes.push(simhash(sig));
+        // Rebuild the same dedup indexes addPage maintains, so the resumed crawl
+        // recognises mirrors/near-dups of RESTORED pages too.
+        if (opts.nearDupHamming > 0 || opts.mirrorHamming > 0) {
+          const sh = simhash(sig);
+          if (opts.nearDupHamming > 0) {
+            if (!scan._simhashes) scan._simhashes = [];
+            scan._simhashes.push(sh);
+          }
+          if (opts.mirrorHamming > 0) {
+            const key = siblingKey(page.url);
+            const kin = scan._siblings.get(key) || [];
+            kin.push({ sh, url: page.url });
+            scan._siblings.set(key, kin);
+          }
         }
         scan.pages.push(page);
         const s = (page.meta && page.meta.strategy) || 'agent';
@@ -258,7 +283,7 @@ export function crawlDocs(targets, options = {}) {
 
   const result = {
     scans,
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens() },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 } },
     warnings: [],
     run: null, // { id, dir, scans } once the run is saved to the cache
   };
@@ -321,30 +346,63 @@ export function crawlDocs(targets, options = {}) {
     },
     // `extra.links` (optional) = the page's discovered links, journaled with it so
     // resume can re-seed the frontier without re-rendering already-kept pages.
+    // Returns TRUE when the page was kept, FALSE when it was dropped (duplicate,
+    // page cap) — the crawl loop uses this to stop expanding links from duplicates.
     addPage(page, extra = {}) {
       const scan = ctx.currentScan;
-      if (!scan) return;
-      if (opts.maxPages > 0 && scan.pages.length >= opts.maxPages) return;
+      if (!scan) return false;
+      if (opts.maxPages > 0 && scan.pages.length >= opts.maxPages) return false;
       // Skip pages whose content duplicates one already captured in THIS scan
       // (the same page reached via throwaway query params like ?version=). The
       // signature ignores link/URL targets so near-identical pages collapse too.
       const md = page.markdown || '';
       const sig = pageSignature(md);
       const hash = createHash('sha1').update(sig).digest('hex');
-      if (scan._hashes.has(hash)) return;
+      if (scan._hashes.has(hash)) {
+        scan.stats.deduped.exact += 1;
+        emit({ type: 'dedup', url: page.url, kind: 'exact' });
+        return false;
+      }
       scan._hashes.add(hash);
-      // OPT-IN near-duplicate collapse (nearDupHamming > 0): drop a page whose SimHash is
-      // within the Hamming threshold of one already kept (same content, template-only
-      // difference). Default 0 = off, so NOTHING beyond exact dupes is ever dropped — this
-      // can only lose content when the user explicitly asks for it. Computed over the same
-      // link/URL-stripped signature, so differing nav/URLs don't hide a near-dup.
+      const sh = opts.mirrorHamming > 0 || opts.nearDupHamming > 0 ? simhash(sig) : null;
+      // MIRROR/VARIANT collapse (mirrorHamming > 0, DEFAULT ON): drop the page only when
+      // its URL is a SIBLING of a kept page's (same locale-stripped path — a mirror host,
+      // a UI-state query variant, a locale twin) AND its content SimHash is within the
+      // threshold. URL shape alone or content closeness alone never drops anything: the
+      // AND is what keeps sibling-shaped pages with real differences (?version=A vs B)
+      // and near-identical TEMPLATES at different paths (two tiny API pages) safe.
+      if (opts.mirrorHamming > 0) {
+        const kin = scan._siblings.get(siblingKey(page.url));
+        if (kin) {
+          for (const prev of kin) {
+            if (prev.url !== page.url && hamming(sh, prev.sh) <= opts.mirrorHamming) {
+              scan.stats.deduped.mirror += 1;
+              emit({ type: 'dedup', url: page.url, kind: 'mirror', of: prev.url });
+              return false;
+            }
+          }
+        }
+      }
+      // OPT-IN cross-path near-duplicate collapse (nearDupHamming > 0): drop a page whose
+      // SimHash is within the Hamming threshold of ANY kept page, regardless of URL.
+      // Default 0 = off — content similarity alone can't tell a duplicate from a sibling
+      // (templated API pages measure ≤3 apart), so this aggressive tier stays a user choice.
       if (opts.nearDupHamming > 0) {
-        const sh = simhash(sig);
         if (!scan._simhashes) scan._simhashes = [];
         for (const prev of scan._simhashes) {
-          if (hamming(sh, prev) <= opts.nearDupHamming) return; // near-dup of a kept page
+          if (hamming(sh, prev) <= opts.nearDupHamming) {
+            scan.stats.deduped.near += 1;
+            emit({ type: 'dedup', url: page.url, kind: 'near' });
+            return false;
+          }
         }
         scan._simhashes.push(sh);
+      }
+      if (sh && opts.mirrorHamming > 0) {
+        const key = siblingKey(page.url);
+        const kin = scan._siblings.get(key) || [];
+        kin.push({ sh, url: page.url });
+        scan._siblings.set(key, kin);
       }
       scan.pages.push(page);
       const s = (page.meta && page.meta.strategy) || 'agent';
@@ -360,6 +418,7 @@ export function crawlDocs(targets, options = {}) {
         bytes: (page.meta && page.meta.bytes) || Buffer.byteLength(md, 'utf8'),
         preview: md.slice(0, 600),
       });
+      return true;
     },
     // Passed to the docs profile so it can drive (or fall back to) the general
     // engine — optionally seeded with a known page set — without a circular import.
@@ -489,6 +548,9 @@ export function crawlDocs(targets, options = {}) {
       for (const s of scans) {
         for (const [k, v] of Object.entries(s.stats.strategyCounts)) {
           result.stats.strategyCounts[k] = (result.stats.strategyCounts[k] || 0) + v;
+        }
+        for (const [k, v] of Object.entries(s.stats.deduped)) {
+          result.stats.deduped[k] = (result.stats.deduped[k] || 0) + v;
         }
       }
 
@@ -645,13 +707,18 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
       }
       return;
     }
+    let expand = true;
     if (outcome.page && !discoveryOnly.has(url)) {
       // The page's links travel with it into the journal (#13): resume re-seeds
       // the frontier from them instead of re-rendering the page to rediscover them.
-      ctx.addPage(outcome.page, { links: outcome.links || [] });
+      const kept = ctx.addPage(outcome.page, { links: outcome.links || [] });
       produced++;
+      // A dropped duplicate's links replicate a page that was already expanded —
+      // following them re-crawls the whole mirror/variant cascade (measured live:
+      // 57% of a run). Discovery-only pages still always expand (that's their job).
+      if (!kept) expand = false;
     }
-    for (const link of outcome.links || []) enqueue(link);
+    if (expand) for (const link of outcome.links || []) enqueue(link);
   }
 
   async function worker() {

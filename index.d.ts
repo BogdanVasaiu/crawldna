@@ -74,12 +74,24 @@ export interface CrawlOptions {
    */
   perDocument?: boolean;
   /**
-   * Collapse near-duplicate pages whose 64-bit SimHash is within this Hamming distance of
-   * an already-kept page (template-only differences). `0` (default) = off: only EXACT
-   * duplicates are dropped. **Opt-in** because collapsing "almost identical" pages can drop
-   * one whose unique content is small — against "never lose content". `3` ≈ Manku/Google.
+   * Collapse near-duplicate pages ACROSS different paths whose 64-bit SimHash is within
+   * this Hamming distance of ANY already-kept page. `0` (default) = off. **Opt-in**
+   * because content similarity alone cannot tell a duplicate from a sibling — measured
+   * on a real run, genuinely distinct templated API pages sat at distance ≤3 — so this
+   * aggressive tier can drop real content and stays a deliberate user choice.
    */
   nearDupHamming?: number;
+  /**
+   * Collapse mirror/variant re-servings of a kept page (default `8`, on). A page is
+   * dropped only when BOTH signals agree: its URL is a SIBLING of a kept page's (same
+   * path once a leading locale segment is stripped — mirror hosts like dev./v2., UI-state
+   * query variants like `?panel=settings`, locale twins `/en/x` vs `/x`) AND its content
+   * SimHash is within this Hamming distance. Sibling-shaped pages with real content
+   * differences (`?version=A` vs `?version=B`) measure far apart and are kept. Links found
+   * on a dropped duplicate are not followed, so mirror cascades stop at the first page.
+   * `0` = off.
+   */
+  mirrorHamming?: number;
   /** Called for every event, in addition to the async iterator. */
   onEvent?: (event: CrawlEvent) => void;
 }
@@ -91,6 +103,7 @@ export type EventType =
   | 'page'
   | 'action'
   | 'extracted'
+  | 'dedup'
   | 'resume'
   | 'progress'
   | 'warn'
@@ -159,6 +172,9 @@ export interface Stats {
   strategyCounts: Record<string, number>;
   /** AI token usage for the run/scan; input and output are billed differently. */
   tokens: TokenUsage;
+  /** Pages dropped as duplicates, by tier: `exact` (sha1), `mirror` (URL-sibling +
+   *  SimHash, default on), `near` (cross-path SimHash, opt-in). */
+  deduped?: { exact: number; mirror: number; near: number };
 }
 
 export interface Warning {
@@ -237,6 +253,7 @@ export declare const DEFAULT_OPTIONS: Required<
     | 'maxRoutes'
     | 'minRelevance'
     | 'nearDupHamming'
+    | 'mirrorHamming'
     | 'save'
     | 'perDocument'
   >

@@ -1915,6 +1915,10 @@ function logEvent(ev) {
       logLine('<span class="tag extract">captured</span> <b>' + esc(ev.title || '(untitled)') + '</b>' +
               (ev.bytes != null ? ' · ' + ev.bytes + 'b' : ''));
       break;
+    case 'dedup':
+      logLine('<span class="tag">dup</span> [' + esc(ev.kind || '') + '] ' + esc(ev.url || '') +
+              (ev.of ? '<div class="muted">≈ ' + esc(ev.of) + '</div>' : ''));
+      break;
     case 'saved':
       logLine('<b>saved</b> — run ' + esc(ev.runId || '') + ' · ' + (ev.scans || []).length + ' link(s)' +
               (ev.dir ? '<div class="muted">' + esc(ev.dir) + '</div>' : ''));

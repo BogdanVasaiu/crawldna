@@ -90,7 +90,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 4 | Prompt caching del prefisso istruzioni (API remote) | consumi | Basso | ✅ fatto (2026-07-02) |
 | 5 | Riuso contesto browser per worker (cache asset) | consumi (tempo+banda) | Basso-Medio | ✅ fatto (2026-07-01, verificato con browser reale) |
 | 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | ☐ da fare |
-| 7 | Dedup near-duplicate con SimHash | precisione output + consumi | Medio | ✅ fatto (2026-07-01, opt-in) |
+| 7 | Dedup near-duplicate con SimHash | precisione output + consumi | Medio | ✅ fatto (2026-07-01 opt-in; 2026-07-02 tier mirror/variante DEFAULT-ON + stop espansione dai duplicati) |
 | 8 | Estrazione stile Trafilatura (pruning per densità link) | precisione | Medio | ✅ fatto (2026-07-01) |
 | 9 | Rinforzo reveal: accessibility-tree / Set-of-Marks | precisione (casi difficili) | Alto | ☐ da fare |
 
@@ -401,7 +401,40 @@ identico per le pagine non cambiate.
 ---
 
 ## #7 — Dedup near-duplicate con SimHash
-**Effetto:** precisione output + consumi · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-01, opt-in)
+**Effetto:** precisione output + consumi · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-01 opt-in · 2026-07-02 tier mirror default-on)
+
+> **Evoluzione 2026-07-02 — tier MIRROR/VARIANTE default-on + frontier feedback.**
+> L'analisi A/B delle run vuetify (20260701-095045 vs 20260702-123253) ha mostrato che il
+> 57% delle 1491 pagine della run nuova erano ri-serviture da host mirror (`next.`/`dev.`/
+> `v3.`) e il 16% varianti query (`?one=settings`) — ~35 min e ~840K token input di puro
+> doppione. Misurato sulle 1491 pagine reali (script SimHash su `pageSignature`):
+> - coppie DUPLICATE vere (mirror/varianti): mediana hamming 4, il 72% ≤ 8;
+> - coppie DISTINTE a path diversi: 36 coppie di pagine API a distanza ≤3 (due a 0 —
+>   template uguale, i token distintivi sono testo-link che la signature spoglia) →
+>   **una soglia globale è insicura a QUALSIASI valore utile**;
+> - coppie DISTINTE a forma-sibling (release-notes `?version=A` vs `B`, stesso path su
+>   prodotto diverso `0.vuetifyjs.com`): minimo 10, quasi tutte ≥ 23 → **URL-shape +
+>   contenuto insieme separano perfettamente**.
+>
+> Da qui il design a due tier in `addPage`:
+> - **`mirrorHamming` (nuovo, default 8 = ON)**: collassa SOLO quando l'URL è un *sibling*
+>   di una pagina tenuta (stesso path dopo strip di un segmento locale iniziale —
+>   `siblingKey()` in [src/lib/url.mjs](src/lib/url.mjs): host mirror, varianti query di
+>   UI-state, gemelli di locale `/en/x`↔`/x`) **E** il SimHash è entro la soglia. La AND
+>   dei due segnali è ciò che rende sicuro il default-on.
+> - **`nearDupHamming` (esistente, default 0 = off)**: tier cross-path aggressivo,
+>   resta opt-in per i motivi misurati sopra.
+> - **Frontier feedback**: `addPage` ora ritorna kept/dropped e il loop NON accoda i link
+>   di una pagina scartata come duplicato → la cascata mirror muore alla prima pagina
+>   (le 846 pagine di sottodominio della run diventano ~4 render). Contatori in
+>   `stats.deduped {exact, mirror, near}` + evento `dedup` per l'osservabilità.
+> - Bonus igiene frontiera: `normalizeUrl` rifiuta path che INIZIANO con un altro URL
+>   assoluto (`/https://…`, join rotto visto dal vivo); i path annidati più in profondità
+>   (Wayback) e le query con URL restano leciti.
+> Test: [test/mirror-dedup.test.mjs](test/mirror-dedup.test.mjs) (stub-site offline:
+> twin+variante collassati, trap-link MAI visitati, `?v=1`/`?v=2` entrambi tenuti,
+> `mirrorHamming: 0` ripristina il vecchio comportamento) + url/index-api aggiornati.
+> ⏳ Da confermare dal vivo ri-lanciando la crawl vuetify (attesi ~600 pagine, ~25 min).
 
 > **Implementato** in modo conservativo (stesso pattern del #1: default = rischio zero).
 > - **Primitiva** [src/lib/simhash.mjs](src/lib/simhash.mjs): SimHash 64-bit (Charikar) puro,

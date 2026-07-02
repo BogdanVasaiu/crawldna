@@ -219,7 +219,8 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `save` | `false` | persist the run to the cache. **Library default: off** (result returned in memory). The CLI/UI turn it on |
 | `cacheDir` | — | where to save when saving is on (default `<cwd>/.sagecrawl/runs`); setting it also turns saving on |
 | `perDocument` | `false` | also package one identifiable `.md` per page (+ `index.md` + `documents.jsonl`) for programmatic use, alongside the consolidated `.md`. Verbatim — see [Output](#output) |
-| `nearDupHamming` | `0` | collapse near-duplicate pages within this SimHash Hamming distance (`0` = off, exact dupes only). **Opt-in** — can drop a page whose unique content is small; `3` ≈ recommended |
+| `mirrorHamming` | `8` | collapse mirror/variant re-servings of a kept page: dropped only when the URL is a **sibling** (same locale-stripped path — mirror hosts like `dev.`/`v2.`, UI-state query variants, `/en/x` vs `/x` locale twins) **and** the content SimHash is within the distance. Sibling-shaped pages with real differences (`?version=A` vs `B`) measure far apart and are kept. Links on a dropped duplicate are not followed, so mirror cascades stop at their first page. `0` = off |
+| `nearDupHamming` | `0` | collapse near-duplicate pages **across different paths** within this SimHash Hamming distance (`0` = off). **Opt-in** — content similarity alone can't tell a duplicate from a sibling (templated API pages measure ≤3 apart), so this can drop a real page |
 | `onEvent` | — | `(ev) => void` callback |
 
 ### Result
