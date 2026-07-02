@@ -260,10 +260,49 @@ async function openaiChat(llm, system, user, schema, timeoutMs = REQUEST_TIMEOUT
       signal: AbortSignal.timeout(timeoutMs),
     });
 
-  let r = await send(!!schema);
-  if (!r.ok && schema && [400, 404, 415, 422, 501].includes(r.status)) {
-    r = await send(false); // provider doesn't support response_format — degrade, don't fail
+  // TRANSIENT-FAILURE RETRY. On a paid API a crawl fires thousands of judgment calls;
+  // rate limits (429) and server hiccups (5xx, connection resets) are ROUTINE there,
+  // and every failed judgment call triggers the completeness-bias fallback — "follow/
+  // keep EVERYTHING" — which quietly blows the crawl off-task. So retry up to twice
+  // with backoff, honouring Retry-After. A TIMEOUT is not retried: the per-call leash
+  // is already generous, and the crawl's keep-bias makes a rare loss safe.
+  const FORMAT_REJECT = [400, 404, 415, 422, 501];
+  const RETRYABLE = new Set([429, 500, 502, 503, 529]);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  let useFormat = !!schema;
+  let r = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    if (attempt > 0) {
+      const ra = r && Number(r.headers.get('retry-after'));
+      await sleep(Math.min(15000, ra > 0 ? ra * 1000 : 500 * 2 ** (attempt - 1)));
+    }
+    try {
+      r = await send(useFormat);
+      lastErr = null;
+    } catch (err) {
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) throw err;
+      lastErr = err; // network-level hiccup (reset, DNS) — retryable like a 5xx
+      r = null;
+      continue;
+    }
+    if (r.ok) break;
+    if (useFormat && FORMAT_REJECT.includes(r.status)) {
+      useFormat = false; // provider doesn't support response_format — degrade, don't fail
+      try {
+        r = await send(false);
+        if (r.ok) break;
+      } catch (err) {
+        if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) throw err;
+        lastErr = err;
+        r = null;
+        continue;
+      }
+    }
+    if (!RETRYABLE.has(r.status)) break; // a real, non-transient error — surface it
   }
+  if (lastErr) throw lastErr;
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`LLM HTTP ${r.status}${body ? ': ' + body.slice(0, 200) : ''}`);

@@ -9,6 +9,14 @@ import { createHash } from 'node:crypto';
 export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLinks = 400 } = {}) {
   const data = await page.evaluate(
     ({ maxRevealers, maxLinks }) => {
+      // Clear the markers left by PREVIOUS perceive passes first. Ids restart from 0
+      // on every pass; without this, an element stamped in an earlier pass keeps its
+      // stale id while a different element gets the same number this pass — and the
+      // actuator's [data-sagecrawl-id="N"] locator (.first()) can then click the
+      // WRONG element. One wrong click corrupts the whole reveal walk.
+      for (const el of document.querySelectorAll('[data-sagecrawl-id]')) {
+        el.removeAttribute('data-sagecrawl-id');
+      }
       const isVisible = (el) => {
         const r = el.getBoundingClientRect();
         if (r.width <= 1 || r.height <= 1) return false;
@@ -91,7 +99,11 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
       };
 
       const LOADMORE = /load\s*more|show\s*more|view\s*more|see\s*more|load\s*all|show\s*all|view\s*all|read\s*more|see\s*all|expand all/i;
-      const INTERACTIVE_CLASS = /(tab|accordion|toggle|expand|collaps|dropdown|selector|switch|segment|pill|chip|disclosure|details|reveal)/i;
+      // `tab(?!le)` on purpose: a bare /tab/ also matches "table"/"tables" (Bootstrap's
+      // `.table`, `.table-responsive`, data grids …), flooding the candidate list with
+      // every styled table on the page — and the list is CAPPED (maxRevealers), so the
+      // noise can crowd real tabs/accordions out of the AI triage entirely.
+      const INTERACTIVE_CLASS = /(tab(?!le)|accordion|toggle|expand|collaps|dropdown|selector|switch|segment|pill|chip|disclosure|details|reveal)/i;
       // Article-toolbar actions that never reveal content (generic doc-UI verbs).
       const NON_CONTENT = /^(copy|copied|copy code|copy page|share|print|edit|edit this|report|feedback|send feedback|bookmark|explain|explain this|dark code|light code|theme|download|like|dislike|rate|thumb|subscribe|run in|try it|open in)\b/i;
 
@@ -111,13 +123,32 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
       let rid = 0;
 
       // ---- consent / overlay dismissals (page-wide, one-time) -------------
+      // Only a button that lives in a real OVERLAY (position:fixed/sticky, a dialog
+      // role, or aria-modal) qualifies. The labels alone are far too generic —
+      // "Continue", "OK", "Close" also caption wizard steps, calendars and forms in
+      // the page flow, and blindly clicking those BEFORE the baseline capture mutates
+      // the very state the reveal pass is about to explore. Cookie/consent banners are
+      // essentially always fixed or modal, so the overlay test is the universal signal
+      // that separates them from in-content controls.
+      const inOverlay = (el) => {
+        let n = el;
+        while (n && n !== document.documentElement) {
+          const role = (n.getAttribute && n.getAttribute('role')) || '';
+          if (/^(dialog|alertdialog)$/i.test(role)) return true;
+          if (n.getAttribute && n.getAttribute('aria-modal') === 'true') return true;
+          const pos = getComputedStyle(n).position;
+          if (pos === 'fixed' || pos === 'sticky') return true;
+          n = n.parentElement;
+        }
+        return false;
+      };
       const consent = [];
       const CONSENT_RE = /\b(accept|agree|got it|i understand|okay|ok\b|allow all|consent|dismiss|continue|reject all|close)\b/i;
       for (const el of document.querySelectorAll('button, [role=button], a')) {
         if (consent.length >= 6) break;
         if (!isVisible(el)) continue;
         const label = labelOf(el);
-        if (label && label.length < 40 && CONSENT_RE.test(label)) {
+        if (label && label.length < 40 && CONSENT_RE.test(label) && inOverlay(el)) {
           el.setAttribute('data-sagecrawl-id', String(rid));
           consent.push({ id: rid, label });
           rid++;

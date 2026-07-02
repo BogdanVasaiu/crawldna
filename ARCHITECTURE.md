@@ -341,8 +341,8 @@ For documentation tasks, completeness comes first, so it tries tiers in order:
 3. **Otherwise** — the engine crawls from the entry page and discovers as it goes.
 
 Tiers 2–3 still run every page through the full browser-first engine, so dynamic
-docs (Firebase per-SDK tabs, SPA nav) are fully revealed. The framework modules
-under `profiles/docs/framework/` are **legacy/unused** — the engine is universal.
+docs (Firebase per-SDK tabs, SPA nav) are fully revealed. There is no per-framework
+special-casing — the engine is universal.
 
 ---
 

@@ -130,20 +130,27 @@ export async function revealAll(page, ctx, url, task) {
       else undecided.push(c);
     }
     if (!undecided.length) return;
-    const batch = undecided.slice(0, 100);
-    let chosen = null;
-    try {
-      chosen = await aiSelectRevealers({ llm: ctx.options.llm, task, candidates: batch });
-    } catch {
-      chosen = null;
-    }
-    for (const c of batch) {
-      const verdict = chosen ? chosen.has(c.signature) : !!c.heuristic;
-      decided.set(c.signature, verdict);
-      // Persist only a MODEL verdict (not the page-local heuristic fallback) and only
-      // for labelled controls, so the cache carries real cross-page judgments.
-      const key = revealKey(c);
-      if (key && chosen) revealCache.set(key, verdict);
+    // Judge EVERY undecided candidate, in batches of the model call's cap. A single
+    // truncated batch used to leave candidates past #100 unjudged — and if the loop
+    // then found nothing actionable and exited, they were never triaged at all
+    // (silent missed content on control-dense pages, against rule #1).
+    for (let i = 0; i < undecided.length; i += 100) {
+      if (ctx.shouldStop()) break;
+      const batch = undecided.slice(i, i + 100);
+      let chosen = null;
+      try {
+        chosen = await aiSelectRevealers({ llm: ctx.options.llm, task, candidates: batch });
+      } catch {
+        chosen = null;
+      }
+      for (const c of batch) {
+        const verdict = chosen ? chosen.has(c.signature) : !!c.heuristic;
+        decided.set(c.signature, verdict);
+        // Persist only a MODEL verdict (not the page-local heuristic fallback) and only
+        // for labelled controls, so the cache carries real cross-page judgments.
+        const key = revealKey(c);
+        if (key && chosen) revealCache.set(key, verdict);
+      }
     }
   };
 

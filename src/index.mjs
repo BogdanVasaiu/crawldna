@@ -13,7 +13,7 @@ import { runDocsProfile } from './profiles/docs.mjs';
 import { crawlPageWithEngine } from './engine/crawl-page.mjs';
 import { assembleScan, assemblePerDocument } from './lib/layout.mjs';
 import { saveRun, scanIdFor } from './lib/runs.mjs';
-import { closeBrowser, configureContextPool } from './lib/browser.mjs';
+import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf } from './lib/url.mjs';
 import { isDocsTask } from './lib/task.mjs';
 import { resolveLlm, checkModel, abortPendingLlm } from './lib/llm.mjs';
@@ -147,7 +147,7 @@ export function crawlDocs(targets, options = {}) {
   // Each submitted link is an independent SCAN: its own pages, its own dedup,
   // its own output files. A run is just the container recording which scans were
   // crawled together (the user can later open one link or the whole run).
-  const emptyCounts = () => ({ 'docs:llms-full': 0, 'docs:sitemap': 0, 'docs:framework': 0, agent: 0 });
+  const emptyCounts = () => ({ 'docs:llms-full': 0, 'docs:sitemap': 0, agent: 0 });
   // AI usage meter — input/output token totals so a run's API cost can be
   // approximated after the fact (input and output are billed differently).
   // `byKind` splits the same totals by WHICH judgment spent them (reveal / scope /
@@ -305,6 +305,10 @@ export function crawlDocs(targets, options = {}) {
   };
 
   (async () => {
+    // Hold the shared browser for this run's lifetime; the matching release in the
+    // finally below closes it only when NO other run is still using it (the UI can
+    // start a new crawl while the previous one is winding down).
+    retainBrowser();
     try {
       // Health-check the model ONCE before crawling. The judgment calls all
       // `.catch()` and bias toward keep/follow/reveal, so a misconfigured model
@@ -404,7 +408,7 @@ export function crawlDocs(targets, options = {}) {
         }
       }
 
-      await closeBrowser();
+      await releaseBrowser(); // closes the shared browser only when no run still holds it
       emit({ type: 'done', stats: result.stats, run: result.run });
       stream.close();
       resolveResult(result);
@@ -487,6 +491,7 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
   let produced = 0;
   let bootstrapped = false;
   let active = 0; // pages currently being crawled
+  const retried = new Set(); // URLs already given their one transient-failure retry
 
   // Each page's reveal loop is self-contained, so pages can be crawled in
   // parallel (each in its own browser context) — far faster on large docs sets.
@@ -498,7 +503,25 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
     try {
       outcome = await crawlPageWithEngine({ url, task: target.task }, ctx);
     } catch (err) {
-      ctx.emit({ type: 'error', url, message: 'page failed: ' + (err && err.message) });
+      outcome = { page: null, links: [], failed: true, error: err };
+    }
+    // A transient load failure (navigation timeout, connection reset) yields neither
+    // content nor links. Losing the page silently breaks "never miss content", so
+    // give each URL exactly one retry before declaring it failed.
+    if (outcome.failed) {
+      if (!retried.has(url) && !ctx.shouldStop()) {
+        retried.add(url);
+        visited.delete(url);
+        queued.delete(url);
+        enqueue(url);
+        ctx.emit({ type: 'warn', url, reason: 'retry', message: 'Page failed to load; retrying once.' });
+      } else {
+        ctx.emit({
+          type: 'error',
+          url,
+          message: 'page failed: ' + ((outcome.error && outcome.error.message) || 'did not load (after retry)'),
+        });
+      }
       return;
     }
     if (outcome.page && !discoveryOnly.has(url)) {

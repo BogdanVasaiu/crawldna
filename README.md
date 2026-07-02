@@ -216,7 +216,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
   } ],
   stats: {
     pages, durationMs,
-    strategyCounts: { 'docs:llms-full', 'docs:sitemap', 'docs:framework', agent },
+    strategyCounts: { 'docs:llms-full', 'docs:sitemap', agent },
     tokens: { calls, inputTokens, outputTokens, byKind: { reveal, scope, links, 'nav-plan', … } },  // AI cost, split by call type
   },
   warnings: [ { url?, reason, message } ],

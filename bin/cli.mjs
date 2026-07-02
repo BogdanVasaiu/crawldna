@@ -28,7 +28,7 @@ Usage:
   sagecrawl reshape <runId> --ask "..."                reshape a saved extraction (Phase 2)
   sagecrawl serve [--port 4000]                        start the optional Web UI (source repo only)
   sagecrawl runs [list|rm <id…>|clear|path]            manage cached runs
-  sagecrawl --help
+  sagecrawl --help · --version
 
 The crawler is CLI- and library-first; the Web UI is an optional frontend that
 ships only with the source repository (not the npm package), so it never weighs
@@ -113,6 +113,7 @@ const OPTION_CONFIG = {
   scan: { type: 'string' },
   'no-verify': { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
 };
 
 async function buildTargets(values, positionals) {
@@ -163,7 +164,18 @@ function optionsFromFlags(values) {
   return o;
 }
 
+// One in-place progress line on a TTY (thousands of pages must not mean thousands
+// of printed lines); a throttled plain line when piped to a file/CI log.
+let progressOpen = false;
+function endProgressLine() {
+  if (progressOpen) {
+    process.stdout.write('\n');
+    progressOpen = false;
+  }
+}
+
 function renderEvent(ev) {
+  if (ev.type !== 'progress') endProgressLine();
   switch (ev.type) {
     case 'site':
       process.stdout.write(`\n${c(C.bold, '▶ site')} ${ev.url}  ${c(C.dim, '— ' + ev.task)}\n`);
@@ -192,7 +204,13 @@ function renderEvent(ev) {
       break;
     }
     case 'progress':
-      if (ev.total) process.stdout.write(`  ${c(C.dim, `progress ${ev.done}/${ev.total}`)}\n`);
+      if (!ev.total) break;
+      if (useColor) {
+        process.stdout.write(`\r  ${c(C.dim, `progress ${ev.done}/${ev.total}`)}\x1b[K`);
+        progressOpen = true;
+      } else if (ev.done % 25 === 0 || ev.done === ev.total) {
+        process.stdout.write(`  progress ${ev.done}/${ev.total}\n`);
+      }
       break;
     case 'warn':
       process.stdout.write(`  ${c(C.yellow, '⚠ warn')} ${ev.reason ? '[' + ev.reason + '] ' : ''}${ev.message}\n`);
@@ -226,6 +244,7 @@ async function runCrawl(values, positionals) {
   process.on('SIGINT', onSigint);
 
   for await (const ev of run) renderEvent(ev);
+  endProgressLine();
 
   const result = await run.result;
   process.off('SIGINT', onSigint);
@@ -394,6 +413,12 @@ async function main() {
 
   if (values.help || (positionals[0] === 'help')) {
     process.stdout.write(HELP);
+    return;
+  }
+
+  if (values.version || positionals[0] === 'version') {
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    process.stdout.write(`sagecrawl ${pkg.version}\n`);
     return;
   }
 

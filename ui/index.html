@@ -20,8 +20,10 @@
     --sh1:0 1px 2px rgba(0,0,0,.4); --sh2:0 10px 34px rgba(0,0,0,.5); --sh-glow:0 0 22px var(--a-glow);
   }
   * { box-sizing:border-box; }
+  html { overflow-x:clip; } /* nothing may ever stretch the page sideways */
   body { margin:0; font-family:var(--font); font-size:13px; line-height:1.55;
          background:var(--bg); color:var(--t1); -webkit-font-smoothing:antialiased;
+         overflow-x:clip; overflow-wrap:break-word;
          background-image:
            radial-gradient(820px 460px at 10% -8%, rgba(34,227,163,.06), transparent 60%),
            radial-gradient(760px 480px at 102% -4%, rgba(14,165,233,.06), transparent 55%);
@@ -120,6 +122,10 @@
     color:var(--t3); font-size:11.5px; line-height:1.7; }
   details.opts-guide code { font-family:var(--mono); font-size:11px; background:var(--s5);
     padding:1px 5px; border-radius:var(--r-xs); color:var(--t1); }
+  details.opts-guide .sum-hint { margin-left:auto; color:var(--t4); font-size:10.5px; font-weight:400;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  details.opts-guide.adv > summary::before { content:'⚙'; font-size:10px; }
+  details.opts-guide.adv { margin-top:16px; }
 
   /* ---- ollama status + install hint ---- */
   .ollama { margin-bottom:14px; }
@@ -181,16 +187,20 @@
   .dd-empty code { font-size:10.5px; }
 
   /* ===================== history lists ===================== */
-  .runs { display:grid; gap:8px; }
-  .run { display:flex; align-items:center; gap:12px; cursor:pointer;
+  /* min-width:0 EVERYWHERE in this chain: a long nowrap task/URL used to blow the
+     card up to its intrinsic width (~1050px+) and stretch the whole page sideways —
+     the ellipsis never got a chance. Now the text truncates, the page never grows. */
+  .runs { display:grid; gap:8px; min-width:0; }
+  .run { display:flex; align-items:center; gap:12px; cursor:pointer; min-width:0;
          background:var(--s3); border:1px solid var(--b1); border-left:3px solid transparent;
          border-radius:var(--r); padding:11px 14px; transition:transform .14s ease, background .14s, border-color .14s, box-shadow .14s; }
   .run:hover { border-left-color:var(--a); background:var(--s4); transform:translateX(2px); box-shadow:var(--sh1); }
-  .run .meta { flex:1; min-width:0; }
+  .run .meta { flex:1 1 0; min-width:0; }
   .run .t { font-weight:600; color:var(--t1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .run .sub { color:var(--t3); font-size:11.5px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .run .when { color:var(--t4); font-family:var(--mono); font-size:10.5px; white-space:nowrap; max-width:42%; overflow:hidden; text-overflow:ellipsis; }
-  .run button.danger { padding:4px 10px; font-size:13px; }
+  .run .when { color:var(--t4); font-family:var(--mono); font-size:10.5px; white-space:nowrap;
+               flex:0 1 auto; min-width:0; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
+  .run button.danger { padding:4px 10px; font-size:13px; flex-shrink:0; }
 
   /* ===================== step 2: run / view ===================== */
   .runview { display:flex; flex-direction:column; height:calc(100vh - 56px); }
@@ -211,8 +221,10 @@
   .link-tab.active { color:var(--a); background:var(--s5); font-weight:600; box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px var(--b3); }
   .link-tab .lt-badge { font-size:9px; padding:1px 6px; border-radius:99px; background:var(--b2); color:var(--t3); font-weight:600; }
   .link-tab.active .lt-badge { color:var(--a); background:var(--a-dim); }
-  .runtop-right { display:flex; align-items:center; gap:14px; flex-shrink:0; }
-  .runtop-prog { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap; }
+  .runtop-right { display:flex; align-items:center; gap:14px; flex-shrink:0; min-width:0; }
+  .runtop-prog { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap;
+                 overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+  .prog-stack { min-width:0; }
 
   /* live crawl stats — the numbers that actually matter mid-crawl */
   .stats { display:flex; align-items:stretch; }
@@ -250,14 +262,40 @@
   .ctx .ctx-task { color:var(--t3); flex-shrink:1; min-width:0; max-width:50%; padding-left:9px; margin-left:1px;
                    border-left:1px solid var(--b2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-  /* file tabs (segmented control) */
-  .files { display:flex; gap:3px; flex-wrap:wrap; align-items:center; flex-shrink:0;
+  /* file tabs (segmented control) — TWO groups with distinct identities:
+     green = verbatim crawl output · violet = AI-reshaped files (from the chat).
+     The same colour language is used on the chat chips and the viewer badge, so
+     "which document am I looking at?" always has one obvious answer. */
+  .files { display:flex; gap:3px; flex-wrap:wrap; align-items:center; flex-shrink:0; min-width:0;
            margin:14px 24px 0; padding:6px; background:var(--s3); border:1px solid var(--b2); border-radius:var(--r); }
   .files .label { color:var(--t4); font-size:9px; text-transform:uppercase; letter-spacing:.09em; margin:0 8px 0 5px; font-weight:600; }
+  .files .label.rs-label { color:var(--man); opacity:.75; }
+  .files .divider { width:1px; align-self:stretch; margin:2px 6px; background:var(--b2); }
   .files .chip { padding:7px 14px; border:none; border-radius:var(--r-sm); background:transparent; cursor:pointer;
-                 font-family:var(--mono); font-size:11px; font-weight:500; color:var(--t3); transition:all .15s; }
+                 font-family:var(--mono); font-size:11px; font-weight:500; color:var(--t3); transition:all .15s;
+                 max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .files .chip:hover { color:var(--t1); background:rgba(255,255,255,.05); }
   .files .chip.active { color:var(--a); background:var(--s5); font-weight:600; box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px var(--b3); }
+  .files .chip.rs { color:var(--t3); }
+  .files .chip.rs:hover { color:#a5b4fc; }
+  .files .chip.rs.active { color:var(--man); background:var(--s5); font-weight:600; box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px rgba(129,140,248,.35); }
+  .files .chip .chip-warn { color:var(--amb); margin-left:5px; }
+
+  /* which document is open — a slim identity bar the viewer can never lose */
+  .doc-head { display:flex; align-items:center; gap:9px; flex-shrink:0; min-width:0;
+              margin:10px 24px 0; padding:7px 12px; background:var(--s2);
+              border:1px solid var(--b1); border-radius:var(--r-sm); font-size:11.5px; }
+  .doc-head.hidden { display:none; }
+  .doc-head .dh-name { font-family:var(--mono); font-size:11.5px; color:var(--t1); font-weight:600;
+                       min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .doc-head .dh-badge { flex-shrink:0; font-size:9px; font-weight:700; letter-spacing:.07em;
+                        text-transform:uppercase; padding:2.5px 9px; border-radius:99px; }
+  .doc-head .dh-badge.crawl { color:var(--a); background:var(--a-dim); border:1px solid var(--a-border); }
+  .doc-head .dh-badge.reshape { color:#a5b4fc; background:rgba(129,140,248,.10); border:1px solid rgba(129,140,248,.3); }
+  .doc-head .dh-meta { color:var(--t4); font-family:var(--mono); font-size:10.5px; flex-shrink:0; }
+  .doc-head .dh-warn { color:var(--amb); font-size:10.5px; flex-shrink:0; }
+  .doc-head .dh-back { margin-left:auto; flex-shrink:0; padding:4px 11px; font-size:10.5px; color:var(--t3); }
+  .doc-head .dh-back:hover { color:var(--a); border-color:var(--a-border); transform:none; }
 
   /* viewer — scrolls independently of the page */
   .viewer { flex:1; min-height:0; overflow:auto; padding:24px 28px 48px; }
@@ -313,8 +351,11 @@
   .md-body blockquote { margin:1em 0; padding:.5em 1em; border-left:3px solid var(--a);
                         background:var(--a-dim); border-radius:0 var(--r-sm) var(--r-sm) 0; color:var(--t2); }
   .md-body blockquote p { margin:.2em 0; }
-  .md-body table { border-collapse:separate; border-spacing:0; margin:1.1em 0; width:100%; font-size:12.5px;
-                   border:1px solid var(--b1); border-radius:var(--r); overflow:hidden; box-shadow:var(--sh1); }
+  /* a wide table scrolls INSIDE its wrapper instead of dragging the whole viewer
+     (or page) sideways — vital on mobile */
+  .md-body .md-table { overflow-x:auto; margin:1.1em 0; border:1px solid var(--b1);
+                       border-radius:var(--r); box-shadow:var(--sh1); max-width:100%; }
+  .md-body table { border-collapse:separate; border-spacing:0; margin:0; width:100%; font-size:12.5px; }
   .md-body th, .md-body td { padding:9px 13px; text-align:left; border-bottom:1px solid var(--b1); }
   .md-body tbody tr:last-child td { border-bottom:none; }
   .md-body th { background:var(--s3); color:var(--t1); font-weight:600; font-size:11px;
@@ -399,11 +440,15 @@
   .rs-msg.bot.err { background:rgba(248,113,113,.08); border-color:rgba(248,113,113,.25); color:var(--err); }
   .rs-msg.pending { color:var(--t4); font-style:italic; }
   .rs-files { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+  /* violet = reshaped file (matches the FILES bar + viewer badge colour language) */
   .rs-file { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:var(--r-sm); cursor:pointer;
-             font-family:var(--mono); font-size:10.5px; color:var(--a); background:var(--a-dim); border:1px solid var(--a-border);
-             transition:background .15s; }
-  .rs-file:hover { background:rgba(34,227,163,.18); }
+             font-family:var(--mono); font-size:10.5px; color:#a5b4fc; background:rgba(129,140,248,.10);
+             border:1px solid rgba(129,140,248,.28); transition:background .15s, border-color .15s;
+             max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rs-file:hover { background:rgba(129,140,248,.2); }
+  .rs-file.active { background:rgba(129,140,248,.24); border-color:rgba(129,140,248,.6); color:#c7d2fe; }
   .rs-file::before { content:'▤'; font-size:10px; opacity:.85; }
+  .rs-file .chip-warn { color:var(--amb); }
   .rs-input { display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--b1); flex-shrink:0; align-items:flex-end; }
   .rs-input textarea { flex:1; resize:none; background:var(--s3); border:1px solid var(--b2); color:var(--t1);
                        padding:9px 11px; border-radius:var(--r-sm); font-family:var(--font); font-size:12.5px; line-height:1.5;
@@ -415,13 +460,60 @@
   .hidden { display:none !important; }
 
   /* ===================== responsive ===================== */
+  /* ---- tablet / narrow desktop ---- */
+  @media (max-width:1060px) {
+    .run-body { grid-template-columns:1fr clamp(300px, 38%, 400px); }
+    .stat { padding:0 10px; }
+    .prog-stack { width:120px; }
+  }
+
+  /* ---- the run header stacks: tabs row, then stats+progress row ---- */
+  @media (max-width:900px) {
+    .runtop { flex-wrap:wrap; row-gap:8px; padding:9px 14px; }
+    .link-tabs { flex:1 1 100%; order:1; }
+    .tabs-label { display:none; }
+    .runtop-right { order:2; flex:1 1 100%; justify-content:space-between; gap:10px; }
+    .prog-stack { flex:1 1 auto; width:auto; min-width:90px; }
+    .stat-n { font-size:15px; }
+    .stat { padding:0 9px; }
+    .stat:first-child { padding-left:0; }
+  }
+
+  /* ---- phone ---- */
   @media (max-width:720px) {
+    header { height:50px; padding:0 14px; gap:10px; }
+    header h1 { font-size:15px; }
     .brand-tag { display:none; }
+    .status { padding:3px 9px 3px 20px; }
+    #back { padding:6px 12px; font-size:12px; white-space:nowrap; }
+
+    .setup { padding:16px 12px 40px; gap:12px; }
+    .card { padding:15px 14px; border-radius:var(--r); }
     .grid2 { grid-template-columns:1fr; }
-    .run-body { grid-template-columns:1fr; }
-    .side { border-left:none; border-top:1px solid var(--b1); min-height:46vh; }
-    .runtop-right { width:auto; }
-    .viewer { padding:18px 16px 40px; }
+    /* link+task rows stack; the remove button hangs off the task line */
+    .row { flex-wrap:wrap; }
+    .row input.url { flex:1 1 100%; }
+    .row input.task { flex:1 1 0; min-width:0; }
+    #rows.shared .row input.url { flex:1 1 0; min-width:0; }
+    .actions .primary { width:100%; padding:13px 20px; }
+    .run .when { display:none; }  /* the URL column: redundant with the title on a phone */
+
+    /* run view: main on top, panel below — both usable */
+    .runview { height:auto; min-height:calc(100dvh - 50px); }
+    .run-body { grid-template-columns:1fr; grid-template-rows:minmax(46dvh, auto) auto; }
+    .run-main { min-height:46dvh; }
+    .side { border-left:none; border-top:2px solid var(--b2); min-height:52dvh; }
+    .viewer { padding:16px 14px 36px; }
+    .ctx, .files, .doc-head { margin-left:14px; margin-right:14px; }
+    .stats { width:100%; justify-content:space-between; }
+    .stat { padding:0 6px; text-align:left; }
+    .prog-stack { flex-basis:100%; }
+    .runtop-right { row-gap:8px; flex-wrap:wrap; }
+    .rs-msg { max-width:100%; }
+    button, .files .chip, .link-tab { -webkit-tap-highlight-color:transparent; }
+    /* the open document's name gets its own full-width line; badge/size/actions below */
+    .doc-head { flex-wrap:wrap; row-gap:7px; }
+    .doc-head .dh-name { flex:1 1 100%; order:-1; white-space:normal; overflow-wrap:anywhere; }
   }
 </style>
 </head>
@@ -528,24 +620,28 @@
           </div>
         </div>
         <div id="ollamaHostCell"><label>Ollama host</label><input id="ollamaHost" value="http://localhost:11434" /></div>
-        <div><label>Browser</label>
-          <select id="browser">
-            <option value="auto">auto</option>
-            <option value="never">never</option>
-            <option value="always">always</option>
-          </select>
-        </div>
-        <div><label>Concurrency</label><input id="concurrency" type="number" value="4" min="1" /></div>
-        <div><label>Max pages (0=∞)</label><input id="maxPages" type="number" value="0" min="0" /></div>
-        <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
-        <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
-        <div><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
       </div>
 
-      <details class="opts-guide">
-        <summary>What do these options do?</summary>
+      <!-- everything non-essential lives behind one fold: the first screen stays
+           "links + task + AI", which is all a first crawl needs -->
+      <details class="opts-guide adv">
+        <summary>Advanced options <span class="sum-hint">scope · speed · focus — the defaults are fine</span></summary>
         <div class="og-body">
-          <dl>
+          <div class="grid2">
+            <div><label>Browser</label>
+              <select id="browser">
+                <option value="auto">auto</option>
+                <option value="never">never</option>
+                <option value="always">always</option>
+              </select>
+            </div>
+            <div><label>Concurrency</label><input id="concurrency" type="number" value="4" min="1" /></div>
+            <div><label>Max pages (0=∞)</label><input id="maxPages" type="number" value="0" min="0" /></div>
+            <div><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
+            <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
+            <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
+          </div>
+          <dl style="margin-top:16px">
             <dt>Browser</dt>
             <dd>How the page is opened. <code>auto</code> uses a real browser — needed to click
               things like tabs or “next month”. <code>never</code> is a quick text-only grab that
@@ -554,22 +650,22 @@
             <dd>How many pages load at once. Higher is faster on big sites; no effect on a single page.</dd>
             <dt>Max pages</dt>
             <dd>Stop after this many pages. <code>0</code> = no limit.</dd>
-            <dt>Include</dt>
-            <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
-            <dt>Exclude</dt>
-            <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
             <dt>Focus on task</dt>
             <dd>How strictly to stay on the task. <code>0</code> = off (default — never drops a
               page). Raise it (e.g. <code>0.5</code>) to skip links that don't match your task
               words: faster and more on-topic, but it may miss a page with vague link text. It
               reads <b>your task</b>, not the site, so it works on any site without rules.</dd>
+            <dt>Include</dt>
+            <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
+            <dt>Exclude</dt>
+            <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
           </dl>
           <p class="og-foot">
             <b>Regex examples:</b> Include <code>/docs/</code> stays in that section ·
             Exclude <code>/blog/</code> or <code>\.pdf$</code> skips those ·
             <code>a|b</code> = a or b · <code>\.</code> = a literal dot.
             Matching is “contains” by default — leave both empty to follow everything in scope.
-            <br>For a single page (e.g. a calendar), just keep <b>Browser = auto</b> and ignore the rest.
+            <br>For a single page (e.g. a calendar), the defaults are all you need.
           </p>
         </div>
       </details>
@@ -635,6 +731,10 @@
     <div class="run-main">
       <div class="ctx" id="run-ctx"></div>
       <div class="files" id="run-files"><span class="label">files</span><span class="muted">no files yet</span></div>
+      <!-- identity of the OPEN document: name · origin badge (crawl/reshape) · size.
+           Without it, opening a reshape file from the chat silently swapped the viewer
+           while the crawl file's tab still looked active — impossible to tell apart. -->
+      <div class="doc-head hidden" id="run-doc"></div>
       <div class="viewer" id="run-viewer"><div class="empty">Select a file to view its Markdown.</div></div>
     </div>
 
@@ -670,11 +770,12 @@
           <div class="rs-head">
             <div class="rs-title">Reshape</div>
             <div class="rs-sub">Ask for tables, splits or filtered subsets of this link’s extraction.
-              Each answer is saved as a new file — crawl once, reshape many times.</div>
+              Each answer is saved as a new <b style="color:#a5b4fc">reshaped</b> file next to the
+              <b style="color:var(--a)">crawl output</b> — crawl once, reshape many times.</div>
           </div>
           <div class="rs-log" id="rs-log"></div>
           <form class="rs-input" id="rs-form">
-            <textarea id="rs-msg" rows="2" placeholder="e.g. make a table of the prices · split the menu by category · only the available days"></textarea>
+            <textarea id="rs-msg" rows="2" placeholder="e.g. make a table of the prices · split by category"></textarea>
             <button class="primary" id="rs-send" type="submit">Send</button>
           </form>
         </section>
@@ -775,8 +876,8 @@ function renderMarkdown(raw) {
       const header = splitRow(line); i++;
       const rows = [];
       while (i + 1 < lines.length && lines[i + 1].includes('|') && lines[i + 1].trim() !== '') { rows.push(splitRow(lines[i + 1])); i++; }
-      html += '<table><thead><tr>' + header.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr></thead><tbody>' +
-        rows.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+      html += '<div class="md-table"><table><thead><tr>' + header.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr></thead><tbody>' +
+        rows.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
       continue;
     }
     const h = line.match(/^(#{1,6})\s+(.*)$/);
@@ -870,6 +971,14 @@ function fmtSize(b) {
   const gb = b / 1e9;
   if (gb >= 1) return gb.toFixed(1).replace(/\.0$/, '') + ' GB';
   return Math.max(1, Math.round(b / 1e6)) + ' MB';
+}
+
+// Human-readable file size for document chips/headers ("2.8 MB", not "2788831b").
+function fmtBytes(b) {
+  b = Number(b) || 0;
+  if (b >= 1e6) return (b / 1e6).toFixed(b >= 1e7 ? 0 : 1) + ' MB';
+  if (b >= 1024) return Math.round(b / 1024) + ' KB';
+  return b + ' B';
 }
 
 // Inline icons: a chip for local models, a cloud for hosted ones.
@@ -1145,6 +1254,7 @@ function clearRun() {
   runScans = []; activeScanId = null; liveRunId = null;
   $('link-tabs').innerHTML = '';
   $('run-files').innerHTML = '<span class="label">files</span><span class="muted">no files yet</span>';
+  $('run-doc').classList.add('hidden'); $('run-doc').innerHTML = '';
   $('run-viewer').innerHTML = '<div class="empty">Select a file to view its Markdown.</div>';
   $('run-bar-i').style.width = '0'; $('run-prog').textContent = ''; resetStats();
   $('run-ctx').innerHTML = '';
@@ -1170,6 +1280,8 @@ function addScan(meta) {
   s = {
     scanId: meta.scanId || '', url: meta.url || '', task: meta.task || '', title: meta.title || '',
     files: [], extractions: [], activeFile: null, startedAt: Date.now(), prog: { pct: 0, label: '' },
+    chatFiles: [],   // files produced by Reshape ({ filename, bytes, fidelity? }) — shown in the FILES bar
+    openDoc: null,   // the document the viewer shows: { name, source: 'crawl'|'reshape' }
   };
   runScans.push(s);
   renderLinkTabs();
@@ -1236,10 +1348,13 @@ function showTokens() {
   }
   const total = (t.inputTokens || 0) + (t.outputTokens || 0);
   el.textContent = fmtCompact(total);
+  const cached = t.cachedInputTokens
+    ? ` ${t.cachedInputTokens.toLocaleString()} of the input came from the provider's prompt cache (~10× cheaper).`
+    : '';
   $('st-ai-box').title =
     `${total.toLocaleString()} AI tokens — ${(t.inputTokens || 0).toLocaleString()} in · ` +
-    `${(t.outputTokens || 0).toLocaleString()} out · ${(t.calls || 0).toLocaleString()} calls. ` +
-    `Multiply by your model's per-token price to approximate the API cost.`;
+    `${(t.outputTokens || 0).toLocaleString()} out · ${(t.calls || 0).toLocaleString()} calls.` + cached +
+    ` Multiply by your model's per-token price to approximate the API cost.`;
 }
 
 function updateRunProgress(s) {
@@ -1251,25 +1366,99 @@ function updateRunProgress(s) {
   $('st-eta').textContent = p.eta || '—';
 }
 
-function renderMain(s) {
-  const fbar = $('run-files'), viewer = $('run-viewer');
-  if (!s) { fbar.innerHTML = ''; viewer.innerHTML = '<div class="empty">No link selected.</div>'; return; }
+// The FILES bar: crawl output (green) and reshaped files (violet), clearly apart.
+// Returns true when there is at least one document to open.
+function renderFilesBar(s) {
+  const fbar = $('run-files');
+  const chatFiles = s.chatFiles || [];
+  if (!s.files.length && !chatFiles.length) { fbar.style.display = 'none'; return false; }
+  fbar.style.display = '';
+  fbar.innerHTML = '';
+  const mkChip = (f, source) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip' + (source === 'reshape' ? ' rs' : '');
+    chip.dataset.name = f.filename;
+    chip.dataset.source = source;
+    const nWarn = (f.fidelity && f.fidelity.unverified && f.fidelity.unverified.length) || 0;
+    chip.innerHTML = esc(f.filename) + (f.bytes != null ? ' <span style="opacity:.6">· ' + esc(fmtBytes(f.bytes)) + '</span>' : '') +
+      (nWarn ? '<span class="chip-warn">⚠</span>' : '');
+    chip.title = f.filename +
+      (source === 'reshape' ? ' — produced by Reshape (AI-reworked)' : ' — verbatim crawl output') +
+      (nWarn ? ` · ⚠ ${nWarn} value(s) not found in the crawled sources` : '');
+    chip.onclick = () => (source === 'reshape' ? loadChatFile(s, f.filename) : loadFile(s, f.filename));
+    fbar.appendChild(chip);
+  };
   if (s.files.length) {
-    fbar.style.display = '';
-    fbar.innerHTML = '<span class="label">files</span>';
-    s.files.forEach((f) => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.textContent = f.filename + (f.bytes != null ? ' · ' + f.bytes + 'b' : '');
-      chip.onclick = () => loadFile(s, f.filename, chip);
-      fbar.appendChild(chip);
-    });
-    const want = (s.activeFile && s.files.some((f) => f.filename === s.activeFile)) ? s.activeFile : s.files[0].filename;
-    const chips = [...fbar.querySelectorAll('.chip')];
-    loadFile(s, want, chips[s.files.findIndex((f) => f.filename === want)]);
+    fbar.insertAdjacentHTML('beforeend', '<span class="label">crawl</span>');
+    s.files.forEach((f) => mkChip(f, 'crawl'));
+  }
+  if (chatFiles.length) {
+    if (s.files.length) fbar.insertAdjacentHTML('beforeend', '<span class="divider"></span>');
+    fbar.insertAdjacentHTML('beforeend', '<span class="label rs-label">reshaped</span>');
+    chatFiles.forEach((f) => mkChip(f, 'reshape'));
+  }
+  return true;
+}
+
+// Reflect the OPEN document everywhere at once: files-bar chips, the chat's file
+// chips, and the identity bar above the viewer. One source of truth (s.openDoc).
+function syncDocChips(s) {
+  const d = (s && s.openDoc) || {};
+  $('run-files').querySelectorAll('.chip').forEach((c) =>
+    c.classList.toggle('active', c.dataset.name === d.name && c.dataset.source === d.source));
+  $('rs-log').querySelectorAll('.rs-file').forEach((c) =>
+    c.classList.toggle('active', d.source === 'reshape' && c.dataset.name === d.name));
+}
+
+function setDocHead(s, doc) {
+  const el = $('run-doc');
+  if (!s || !doc) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  const isRs = doc.source === 'reshape';
+  const rec = isRs
+    ? (s.chatFiles || []).find((f) => f.filename === doc.name)
+    : s.files.find((f) => f.filename === doc.name);
+  const bytes = rec && rec.bytes != null ? fmtBytes(rec.bytes) : '';
+  const nWarn = (isRs && rec && rec.fidelity && rec.fidelity.unverified && rec.fidelity.unverified.length) || 0;
+  el.innerHTML =
+    '<span class="dh-badge ' + (isRs ? 'reshape' : 'crawl') + '" title="' +
+      (isRs ? 'Produced by the Reshape chat — AI-reworked from the crawl output'
+            : 'Verbatim extraction — exactly what the crawler captured') + '">' +
+      (isRs ? '▤ reshaped' : '✓ crawl output') + '</span>' +
+    '<span class="dh-name" title="' + escAttr(doc.name) + '">' + esc(doc.name) + '</span>' +
+    (bytes ? '<span class="dh-meta">' + esc(bytes) + '</span>' : '') +
+    (nWarn ? '<span class="dh-warn" title="These values were not found in the crawled sources and may be invented — details inside the file">⚠ ' +
+      nWarn + ' unverified</span>' : '') +
+    (isRs && s.files.length
+      ? '<button type="button" class="ghost dh-back" data-act="back">← crawl output</button>' : '');
+  el.classList.remove('hidden');
+  const back = el.querySelector('[data-act="back"]');
+  if (back) back.onclick = () => {
+    const name = (s.activeFile && s.files.some((f) => f.filename === s.activeFile)) ? s.activeFile : s.files[0].filename;
+    loadFile(s, name);
+  };
+}
+
+function renderMain(s) {
+  const viewer = $('run-viewer');
+  if (!s) { $('run-files').innerHTML = ''; setDocHead(null, null); viewer.innerHTML = '<div class="empty">No link selected.</div>'; return; }
+  if (renderFilesBar(s)) {
+    // open the remembered document if it still exists, else the first crawl file
+    // (or the first reshaped one when the crawl produced none)
+    const chatFiles = s.chatFiles || [];
+    const inCrawl = (n) => s.files.some((f) => f.filename === n);
+    const inChat = (n) => chatFiles.some((f) => f.filename === n);
+    let want = s.openDoc;
+    if (!want || (want.source === 'crawl' ? !inCrawl(want.name) : !inChat(want.name))) {
+      want = s.files.length
+        ? { name: (s.activeFile && inCrawl(s.activeFile)) ? s.activeFile : s.files[0].filename, source: 'crawl' }
+        : { name: chatFiles[0].filename, source: 'reshape' };
+    }
+    if (want.source === 'reshape') loadChatFile(s, want.name);
+    else loadFile(s, want.name);
   } else {
     // no files yet — show this link's live extraction feed (or a placeholder)
-    fbar.style.display = 'none';
+    setDocHead(null, null);
     if (s.extractions.length) {
       viewer.innerHTML = '<div class="scan-extractions">' + s.extractions.join('') + '</div>';
     } else {
@@ -1292,10 +1481,11 @@ function appendExtraction(s, html) {
   while (host.children.length > EXT_CAP) host.removeChild(host.lastChild);
 }
 
-async function loadFile(s, name, chip) {
-  $('run-files').querySelectorAll('.chip').forEach((c) => c.classList.remove('active'));
-  if (chip) chip.classList.add('active');
+async function loadFile(s, name) {
   s.activeFile = name;
+  s.openDoc = { name, source: 'crawl' };
+  syncDocChips(s);
+  setDocHead(s, s.openDoc);
   const viewer = $('run-viewer');
   viewer.innerHTML = '<div class="empty">loading…</div>';
   try {
@@ -1323,15 +1513,26 @@ function syncSide(s) {
   setSideTab(tab);
 }
 
+// Fetch a scan's saved chat session once: messages for the Reshape log AND the file
+// registry (name/bytes/fidelity) that feeds the FILES bar's violet "reshaped" group.
+async function loadChatSession(s) {
+  if (s.chatMessages) return;
+  try {
+    const d = await (await fetch('/runs/' + encodeURIComponent(liveRunId) +
+      '/chat?scan=' + encodeURIComponent(s.scanId))).json();
+    s.chatMessages = d.messages || [];
+    s.chatFiles = d.files || [];
+  } catch {
+    s.chatMessages = s.chatMessages || [];
+    s.chatFiles = s.chatFiles || [];
+  }
+}
+
 async function showChatFor(s) {
   const log = $('rs-log');
   if (!s.chatMessages) {
     log.innerHTML = '<div class="rs-empty">loading…</div>';
-    try {
-      const d = await (await fetch('/runs/' + encodeURIComponent(liveRunId) +
-        '/chat?scan=' + encodeURIComponent(s.scanId))).json();
-      s.chatMessages = d.messages || [];
-    } catch { s.chatMessages = []; }
+    await loadChatSession(s);
   }
   if (activeScanId !== s.scanId) return; // user switched links while we fetched
   renderChatLog(s);
@@ -1360,7 +1561,12 @@ function chatBubble(s, m) {
     for (const name of m.files) {
       const chip = document.createElement('span');
       chip.className = 'rs-file';
-      chip.textContent = name;
+      chip.dataset.name = name;
+      const rec = (s.chatFiles || []).find((f) => f.filename === name);
+      const nWarn = (rec && rec.fidelity && rec.fidelity.unverified && rec.fidelity.unverified.length) || 0;
+      chip.innerHTML = esc(name) + (nWarn ? ' <span class="chip-warn" title="' + nWarn +
+        ' value(s) not found in the crawled sources">⚠</span>' : '');
+      chip.title = 'Open in the viewer' + (nWarn ? ` — ⚠ ${nWarn} unverified value(s)` : '');
       chip.onclick = () => loadChatFile(s, name);
       files.appendChild(chip);
     }
@@ -1370,6 +1576,9 @@ function chatBubble(s, m) {
 }
 
 async function loadChatFile(s, name) {
+  s.openDoc = { name, source: 'reshape' };
+  syncDocChips(s);
+  setDocHead(s, s.openDoc);
   const viewer = $('run-viewer');
   viewer.innerHTML = '<div class="empty">loading…</div>';
   try {
@@ -1411,13 +1620,21 @@ async function sendReshape() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
     let reply = data.reply || ((data.files || []).length ? 'Done.' : '(no response)');
-    if (data.truncated) reply += '\n\n(Only the first part of a large extraction was used.)';
+    if (data.truncated) {
+      reply += data.contextMode === 'retrieval'
+        ? '\n\n(The extraction exceeds the model budget — only the sections relevant to your request were used.)'
+        : '\n\n(Only the first part of a large extraction was used.)';
+    }
     const idx = s.chatMessages.indexOf(pending);
     s.chatMessages[idx] = { role: 'assistant', content: reply, files: (data.files || []).map((f) => f.filename) };
+    // register the new files (bytes + fidelity ride along) → the FILES bar shows them
+    s.chatFiles = [...(s.chatFiles || []), ...(data.files || [])];
     if (activeScanId === s.scanId) {
       renderChatLog(s);
+      renderFilesBar(s);
       const files = s.chatMessages[idx].files;
       if (files && files.length) loadChatFile(s, files[0]); // auto-open the first new file
+      else syncDocChips(s);
     }
   } catch (e) {
     const idx = s.chatMessages.indexOf(pending);
@@ -1466,6 +1683,9 @@ async function openRun(id) {
   }
   runTokens = (manifest.stats && manifest.stats.tokens) || null; // saved AI cost
   showTokens();
+  // Load every link's chat session up front (tiny JSONs) so reshaped files show in
+  // the FILES bar immediately — not only after opening the Reshape tab.
+  await Promise.all(runScans.map(loadChatSession));
   renderLinkTabs();
   selectScan((runScans[0] || {}).scanId);
   await loadActivity(id);
@@ -1482,6 +1702,7 @@ async function openScan(rid, scan) {
   sc.files = scan.files || [];
   const np = scan.pages || 0;
   sc.prog = { pct: 100, done: np, total: np, pending: 0, eta: '', label: np + ' page(s) · ' + (scan.files || []).length + ' file(s)' };
+  await loadChatSession(sc); // reshaped files belong in the FILES bar from the start
   selectScan(sc.scanId);
   await loadActivity(rid);
   setSideTab(sc.files.length ? 'reshape' : 'tree');

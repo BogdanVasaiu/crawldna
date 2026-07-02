@@ -275,6 +275,7 @@ async function handleChatFile(res, id, scan, name) {
 // "not installed" from "installed but not running"; for an OpenAI-compatible API
 // we just probe its /models endpoint. Cloud models are flagged so the UI can
 // group them apart from local ones.
+let _ollamaInstalled = null; // probed once per process: the CLI doesn't (un)install mid-serve
 async function handleModels(res, params) {
   const provider = params.get('provider') || 'ollama';
   const llm = resolveLlm({
@@ -286,12 +287,15 @@ async function handleModels(res, params) {
   const result = await listModels(llm);
   let installed = false;
   if (llm.provider === 'ollama') {
-    try {
-      execSync('ollama --version', { stdio: 'ignore', timeout: 5000 });
-      installed = true;
-    } catch {
-      /* CLI missing or not on PATH */
+    if (_ollamaInstalled === null) {
+      try {
+        execSync('ollama --version', { stdio: 'ignore', timeout: 5000 });
+        _ollamaInstalled = true;
+      } catch {
+        _ollamaInstalled = false; // CLI missing or not on PATH
+      }
     }
+    installed = _ollamaInstalled;
   }
   json(res, 200, { provider: llm.provider, installed, ...result });
 }
@@ -313,7 +317,11 @@ async function handleIndex(res) {
   }
 }
 
-export async function startServer({ port = 4000 } = {}) {
+// `host` defaults to loopback ON PURPOSE: this server has no authentication and can
+// start crawls, read every extraction and delete runs — exposed on 0.0.0.0 that is
+// an open remote control for anyone on the same network. Pass an explicit host only
+// when you understand that trade-off.
+export async function startServer({ port = 4000, host = '127.0.0.1' } = {}) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     try {
@@ -381,7 +389,7 @@ export async function startServer({ port = 4000 } = {}) {
     process.exit(1);
   });
 
-  await new Promise((resolve) => server.listen(port, resolve));
+  await new Promise((resolve) => server.listen(port, host, resolve));
   process.stdout.write(`sagecrawl UI on http://localhost:${port}\n`);
 
   // Make the browser ready up front so the user never hits a mid-crawl error.

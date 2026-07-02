@@ -4,8 +4,11 @@
 > essere lavorato un pezzo alla volta nelle sessioni future. In una nuova sessione
 > basta dire: _"apri TODO.md e implementiamo il #N"_.
 >
-> Fonte: revisione approfondita (2026-06-30) di concorrenti (Crawl4AI, Firecrawl/
-> FIRE-1, Skyvern, browser-use) + ricerca accademica, incrociata col nostro codice.
+> Fonti: revisione approfondita (2026-06-30) di concorrenti (Crawl4AI, Firecrawl/
+> FIRE-1, Skyvern, browser-use) + ricerca accademica, incrociata col nostro codice
+> (item #1–#12); revisione ingegneristica integrale del codice (2026-07-02, Claude
+> Fable) → correzioni applicate + item #13–#18 (vedi la sezione "Revisione
+> ingegneristica completa — 2026-07-02").
 > Vedi anche [ARCHITECTURE.md](ARCHITECTURE.md) e [build-spec.md](build-spec.md).
 
 ---
@@ -99,9 +102,38 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 11 | Reshape (Fase 2): fedeltà verificata | rispetto-task | Medio | ✅ fatto (2026-07-02) |
 | 12 | Harness di misurazione (completezza / rispetto-task / token) | trasversale — abilita tutto | Medio | ✅ fatto (2026-07-01, da verificare dal vivo) |
 
-**Da fare per primi (qualità del crawl):** #1, #2, #3.
-**Per dimostrare il valore (misurabile):** #12.
+**Gruppo C — Affidabilità & operazioni** (dalla revisione ingegneristica 2026-07-02)
+
+| # | Titolo | Effetto | Sforzo | Stato |
+|---|--------|---------|--------|-------|
+| 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ☐ da fare |
+| 14 | Politeness opt-in (delay per host + robots.txt) | affidabilità / reputazione | Basso-Medio | ☐ da fare |
+| 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ☐ da fare |
+| 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ☐ da fare |
+| 17 | CI GitHub Actions (suite offline a ogni push) | qualità continua | Basso | ☐ da fare |
+| 18 | Packaging npm (playwright peer-optional, metadata repo) | fruibilità libreria | Basso | ☐ da fare |
+
+**Da fare per primi (qualità del crawl):** #1, #2, #3. *(fatti)*
+**Per dimostrare il valore (misurabile):** #12. *(fatto)*
 **Per i consumatori programmatici (refdna incluso):** #10 + #6.
+
+### Ordine consigliato per gli item aperti (2026-07-02)
+
+0. **Smoke test dal vivo** (non è un item): un crawl reale (ACI Cremona + un sito docs)
+   per validare le correzioni della revisione 2026-07-02 e chiudere i "⏳ da verificare
+   dal vivo" di #1/#2/#12 — compilando una golden spec vera per l'harness, così ogni
+   item successivo ha il numero prima/dopo.
+1. **#17 CI** — 10 minuti; da lì in poi ogni altro item è protetto dai test a ogni push.
+2. **#13 persistenza incrementale + resume** — PRIMA del #6: crea il layer di scrittura
+   per-URL su disco su cui il crawl incrementale si appoggia (evita di rifarlo due volte).
+3. **#15 render-wait response-quiet** — basso rischio, secondi fissi risparmiati a pagina;
+   rende più rapidi anche tutti i test dal vivo degli item successivi.
+4. **#16 budget route JS** — piccolo, taglia token del gate `links`; misurabile subito.
+5. **#14 politeness opt-in** — obbligatorio prima di pubblicizzare il pacchetto.
+6. **#6 crawl incrementale (ETag/lastmod)** — eredita gratis la persistenza del #13.
+7. **#18 packaging npm** — agganciato al momento del publish.
+8. **#9 accessibility-tree / Set-of-Marks** — per ultimo: sforzo più alto per i casi più
+   rari; affrontarlo quando un sito reale mostra un controllo che il path DOM non trova.
 
 ---
 
@@ -673,6 +705,201 @@ generale); misurazione coverage (sitemap-coverage / golden set; la coverage asso
 
 ---
 
+## Revisione ingegneristica completa — 2026-07-02
+
+> Lettura integrale del codice (engine, layer AI, transport LLM, estrazione,
+> persistenza, CLI, server UI, tipi, test) fatta con Claude (Fable). Due esiti:
+> **(a) 9+ correzioni applicate subito** (verbale sotto — sono nel working tree di
+> quella sessione; una sessione futura le trova nel git history una volta committate)
+> e **(b) gli item #13–#18** qui sotto, i miglioramenti strutturali NON fatti quel
+> giorno, da chiudere nelle prossime sessioni.
+
+### Correzioni applicate (verbale, 2026-07-02) — 97/97 test verdi
+
+1. **Click sull'elemento sbagliato** ([src/engine/perceive.mjs](src/engine/perceive.mjs)):
+   gli id `data-sagecrawl-id` ripartivano da 0 a ogni passata SENZA pulire quelli
+   vecchi → il locator `.first()` poteva cliccare un elemento stale e corrompere la
+   camminata del reveal. Ora ogni perceive rimuove i marker prima di ristampare.
+2. **Estrazione che perdeva contenuto vero** ([src/extract.mjs](src/extract.mjs)):
+   `CHROME_SELECTORS` rimuoveva `.menu` (il menù di una pizzeria!), `.banner`/
+   `.announcement` (annunci reali), `form` (calendari di prenotazione, menù
+   ordinabili) e ogni `header` anche dentro `<article>`. Tolti dalla lista (il
+   pruning per densità di link #8 copre la nav che quelle classi cacciavano);
+   `header` ora è article-aware. +2 test di regressione.
+3. **Retry LLM su errori transitori** ([src/lib/llm.mjs](src/lib/llm.mjs)): un 429/5xx
+   faceva fallire la chiamata di giudizio → fallback "segui/tieni tutto" → esplosione
+   fuori tema. Ora ≤2 retry con backoff, rispetta `Retry-After`, ritenta i reset di
+   rete, NON ritenta i timeout, convive col degrade di `response_format`. +5 test.
+4. **Pagine perse in silenzio su timeout di navigazione**
+   ([src/engine/crawl-page.mjs](src/engine/crawl-page.mjs) +
+   [src/index.mjs](src/index.mjs)): il fallimento ora è marcato (`failed`) e la
+   frontiera riprova l'URL una volta (warn `retry`), poi errore esplicito.
+5. **Pagine 404/500 tenute come contenuto**: con status ≥400 e testo povero
+   (`contentWordLen < 200`) la pagina è scartata; i link si raccolgono comunque.
+   La soglia protegge l'SPA mal configurata che risponde 404 ma renderizza davvero.
+6. **Candidati reveal mai giudicati** ([src/engine/reveal.mjs](src/engine/reveal.mjs)):
+   il triage giudicava solo i primi 100 indecisi per passata → ora batcha fino a
+   esaurirli (rule #1).
+7. **`class="table"` inondava i candidati** (perceive): la regex `/tab/` matchava
+   "table" e con il cap a 150 poteva spingere fuori i tab veri → `tab(?!le)`.
+8. **Consent-dismiss che cliccava bottoni di contenuto** (perceive): "Continue"/"OK"/
+   "Close" venivano cliccati ovunque PRIMA della baseline (anche step di wizard/
+   calendari). Ora il candidato deve stare in un vero overlay (fixed/sticky,
+   `role=dialog`, `aria-modal`) — il segnale universale dei cookie banner.
+9. **Race sul browser condiviso** ([src/lib/browser.mjs](src/lib/browser.mjs)): il
+   `finally` di un run chiudeva Chromium sotto le pagine di un run appena avviato
+   (stop+restart dalla UI). Ora retain/release con refcount.
+10. **Igiene**: UI legata a 127.0.0.1 (prima: chiunque in LAN poteva avviare crawl e
+    cancellare run), probe `ollama --version` cachato (era un `execSync` bloccante a
+    ogni richiesta), eliminati i moduli morti `profiles/docs/framework/*` (pubblicati
+    su npm senza mai essere importati), `--version` in CLI, progress in-place su TTY,
+    `author`/`keywords` in package.json.
+
+### Riscontri minori NON corretti (da tenere d'occhio)
+
+- `candidateObjs` in crawl-page fa un `find` O(n²) su link×candidati — irrilevante
+  fino a ~400 link, da rifare con una Map se mai pesasse.
+- `normalizeUrl` strappa `hl`/`lang`/`locale` dalle query: giusto per dedup delle
+  traduzioni, ma su un sito dove `?lang=` seleziona contenuti DIVERSI una lingua
+  sola viene tenuta. Caso raro, decisione consapevole — documentata qui.
+- La sessione reshape (`session.json`) non è protetta da turni concorrenti (utente
+  singolo oggi: ok).
+- `handleModels` passa l'apiKey come query param (solo loopback dopo il fix: ok).
+
+---
+
+## #13 — Persistenza incrementale + resume del crawl
+**Effetto:** affidabilità (un crash non perde più nulla) · **Sforzo:** Medio-Alto · **Stato:** ☐
+
+**Problema oggi.** `saveRun` ([src/lib/runs.mjs](src/lib/runs.mjs)) scrive TUTTO solo a
+fine run e le pagine vivono in RAM fino ad allora: un crash (o kill, o blackout) alla
+4ª ora di un crawl da 5 perde **tutto l'output**. Non esiste alcun modo di riprendere
+un run interrotto; anche uno Stop volontario ri-parte sempre da zero.
+
+**Proposta.**
+- All'avvio (quando il salvataggio è on) creare subito la cartella del run con un
+  `run.json` in stato `running`.
+- In `ctx.addPage` appendere OGNI pagina tenuta su disco man mano (un JSONL per scan,
+  o direttamente il formato per-documento #10) — verbatim, append-only.
+- A fine run assemblare il consolidato COME OGGI ma leggendo da disco, e marcare
+  `run.json` → `done`.
+- `sagecrawl resume <runId>`: ricostruisce `visited` + dedup-hashes dalle pagine già
+  salvate, ri-semina la frontiera (sitemap/entry) e completa il run.
+- Il contratto libreria NON cambia: senza `save`/`cacheDir` tutto resta in memoria.
+
+**Criterio di accettazione.** `kill -9` a metà di un crawl di riferimento → le pagine
+già estratte sono su disco e leggibili; `resume` completa e l'output finale è
+identico (stesso set di pagine) a un run mai interrotto. Zero scritture quando il
+salvataggio è off.
+
+**File:** `src/lib/runs.mjs`, `src/lib/output.mjs`, `src/index.mjs` (addPage/finally),
+`bin/cli.mjs`, `ui/server.mjs` (esporre resume).
+
+---
+
+## #14 — Politeness opt-in (delay per host + robots.txt)
+**Effetto:** affidabilità / reputazione · **Sforzo:** Basso-Medio · **Stato:** ☐
+
+**Problema oggi.** Nessun rate-limit per host e nessuna lettura di robots.txt:
+concurrency 4 × reveal martella qualsiasi sito. Per un tool pubblicato su npm è un
+rischio doppio: ban/429 dal sito (= contenuto perso, contro la regola #1) e cattiva
+reputazione del progetto.
+
+**Proposta.** Due opzioni indipendenti, entrambe **opt-in** (il tool resta
+user-directed come wget):
+- `--delay <ms>`: distanza minima tra richieste allo STESSO host (frontiera e fetch).
+- `--respect-robots`: legge `Disallow`/`Crawl-delay` e salta gli URL vietati **con
+  warning** (mai in silenzio — il warning è il contratto).
+
+**Criterio di accettazione.** Con delay attivo le richieste same-host distano ≥ delay
+(misurabile dai log); con robots on gli URL disallowed compaiono come warning e non
+come pagine; con entrambe off il comportamento è identico a oggi.
+
+**File:** `src/index.mjs` (frontiera), `src/lib/fetcher.mjs`, nuovo `src/lib/robots.mjs`.
+
+---
+
+## #15 — Render-wait: response-quiet al posto di `networkidle`
+**Effetto:** tempo (−secondi FISSI per pagina sui siti con analytics) · **Sforzo:** Basso-Medio · **Stato:** ☐
+
+**Problema oggi.** `crawlPageWithEngine` aspetta `networkidle` con timeout 8s
+([src/engine/crawl-page.mjs](src/engine/crawl-page.mjs)): sui siti con
+analytics/websocket/heartbeat l'idle non arriva MAI, quindi sono 8 secondi di tassa
+fissa a pagina — ore su un crawl grande (è uno dei motivi delle 5h su Firebase, vedi
+[[firebase-perf-and-fixes]]).
+
+**Proposta.** Sostituire quel wait col segnale **response-quiet già validato** in
+`settle()` ([src/engine/actions.mjs](src/engine/actions.mjs)): risposta vista + grace
+window + testo stabile, bounded. Estrarre `settle` in un helper condiviso e usarlo sia
+al render iniziale sia dopo i click (oggi è solo post-click).
+
+**Criterio di accettazione.** Su un sito con analytics il tempo medio/pagina cala di
+secondi; su pagine di riferimento il Markdown estratto resta byte-identico (harness #12
++ diff).
+
+**File:** `src/engine/crawl-page.mjs`, `src/engine/actions.mjs` (estrazione helper).
+
+---
+
+## #16 — Budget/ranking per le route minate dai JS
+**Effetto:** consumi (token del gate `links`) · **Sforzo:** Basso · **Stato:** ☐
+
+**Problema oggi.** `perceive` mina fino a **800 path** dai blob JS/JSON della pagina
+([src/engine/perceive.mjs](src/engine/perceive.mjs)); sono tutti same-site, quindi
+passano lo scope e finiscono TUTTI al gate AI in batch da 160 — token bruciati su
+`/static/chunk-...`, path di build e simili, e qualche 404 inseguito.
+
+**Proposta.** Stesso pattern del #1 (l'AI resta il giudice, il ranking aiuta):
+- rankare le route con `scoreLink` (già esiste) e mandarne al gate solo le prime N
+  (cap configurabile, es. 200 best) — le altre restano scartabili SOLO da segnali
+  universali non-pagina (estensioni asset, già filtrate in parte);
+- niente regole per-sito, niente pattern URL nuovi.
+
+**Criterio di accettazione.** Su una SPA di riferimento i token `byKind.links` calano
+sensibilmente; il set di pagine tenute resta identico (harness #12).
+
+**File:** `src/engine/perceive.mjs`, `src/engine/crawl-page.mjs`.
+
+---
+
+## #17 — CI GitHub Actions (suite offline a ogni push)
+**Effetto:** qualità continua · **Sforzo:** Basso · **Stato:** ☐
+
+**Problema oggi.** La suite (97 test, zero rete/browser/modello) gira solo a mano: una
+regressione può entrare inosservata.
+
+**Proposta.** `.github/workflows/test.yml`: trigger su push/PR, matrice Node 20 + 22,
+`npm ci && npm test`. Niente browser né modello (la suite è offline by design, resta
+veloce e gratuita).
+
+**Criterio di accettazione.** Badge verde nel README; un test rotto fa fallire il
+check del PR.
+
+**File:** nuovo `.github/workflows/test.yml`, badge nel README.
+
+---
+
+## #18 — Packaging npm (playwright peer-optional + metadata)
+**Effetto:** fruibilità come libreria · **Sforzo:** Basso · **Stato:** ☐
+
+**Problema oggi.** `playwright` è in `optionalDependencies`: npm lo SCARICA comunque
+(~50MB) a ogni `npm install sagecrawl`, anche per un consumer che usa solo la via
+statica/llms-full. Mancano `repository`/`homepage` nel package.json (il remote GitHub
+non è ancora configurato).
+
+**Proposta.** Decisione di prodotto, due strade documentate:
+- (a) passare a `peerDependencies` + `peerDependenciesMeta: { playwright: { optional:
+  true } }` → install leggero, il README già spiega `npx playwright install chromium`;
+- (b) restare così per l'esperienza out-of-the-box.
+  In ogni caso aggiungere `repository`/`homepage`/`bugs` quando il repo è pubblico.
+
+**Criterio di accettazione.** Un consumer statico installa sagecrawl senza scaricare
+Playwright (se si sceglie (a)); `npm publish --dry-run` pulito.
+
+**File:** `package.json`, README (sezione Install).
+
+---
+
 ## Riferimenti (ricerca)
 
 - Crawl4AI — Adaptive Crawling: https://docs.crawl4ai.com/core/adaptive-crawling/
@@ -700,6 +927,7 @@ generale); misurazione coverage (sitemap-coverage / golden set; la coverage asso
 
 ---
 
-_Ultimo aggiornamento: 2026-07-01. sagecrawl è uno strumento GENERALE (refdna è solo un
-consumatore) — vedi "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che
-implementi, e segna le decisioni prese sotto ogni item._
+_Ultimo aggiornamento: 2026-07-02 (revisione ingegneristica: verbale correzioni +
+item #13–#18). sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) —
+vedi "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna
+le decisioni prese sotto ogni item._

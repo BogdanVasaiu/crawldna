@@ -6,7 +6,7 @@
 
 import { isBrowserAvailable, newPage, browserError } from '../lib/browser.mjs';
 import { loadHtml } from '../lib/fetcher.mjs';
-import { extractMarkdown, splitBlocks } from '../extract.mjs';
+import { extractMarkdown, splitBlocks, contentWordLen } from '../extract.mjs';
 import { revealAll } from './reveal.mjs';
 import { aiScopeContent, aiSelectLinks } from './decide.mjs';
 import { isDocsTask } from '../lib/task.mjs';
@@ -153,13 +153,14 @@ export async function crawlPageWithEngine(target, ctx) {
   });
 
   let revealed;
+  let status = 0;
+  let navFailed = false; // navigation itself failed (timeout / network) — retryable
   try {
-    let status = 0;
     try {
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
       status = resp ? resp.status() : 0;
     } catch {
-      /* fall through to whatever rendered */
+      navFailed = true; // fall through to whatever rendered
     }
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     // Give a client-rendered app a chance to paint real content before we look.
@@ -221,6 +222,13 @@ export async function crawlPageWithEngine(target, ctx) {
     return { href, label: found ? found.label : '' };
   });
 
+  // The navigation never loaded anything AND the page yielded neither content nor
+  // links: a transient failure (timeout, connection reset), not an empty page.
+  // Signal it so the frontier can retry the URL once instead of silently losing it.
+  if (navFailed && !markdown && candidates.length === 0) {
+    return { page: null, links: [], failed: true };
+  }
+
   const docsTask = isDocsTask(task);
 
   // Crawl-time scoping keeps only task-relevant SECTIONS, VERBATIM (custom tasks
@@ -251,7 +259,13 @@ export async function crawlPageWithEngine(target, ctx) {
   // judged once, so homogeneous nav (a shared sidebar/footer) costs one call.
   const follow = await decideFollow(ctx, task, candidateObjs);
 
-  if (!markdown || !relevant) return { page: null, links: follow };
+  // An HTTP error page (404/410/500 …) whose rendered content is thin is server
+  // boilerplate ("page not found"), not content — keep its links (they drive the
+  // recovery navigation) but never its body. The word-count floor protects the one
+  // legitimate exception: a misconfigured SPA host that answers 404 while the app
+  // renders a full, real page client-side.
+  const errorPage = status >= 400 && contentWordLen(markdown) < 200;
+  if (!markdown || !relevant || errorPage) return { page: null, links: follow };
 
   return {
     page: {
@@ -270,7 +284,8 @@ export async function crawlPageWithEngine(target, ctx) {
 async function staticFallback(target, ctx) {
   const { url, task } = target;
   const res = await loadHtml(url, { browserMode: ctx.options.browser, ctx });
-  if (!res.html) return { page: null, links: [] };
+  // status 0 = the fetch itself failed (network/timeout) — retryable, not "empty page".
+  if (!res.html) return { page: null, links: [], failed: !res.status };
 
   const { title, markdown } = extractMarkdown(res.html, { baseUrl: res.finalUrl });
   const links = new Set();
@@ -279,7 +294,11 @@ async function staticFallback(target, ctx) {
     if (abs) links.add(abs);
   }
 
-  if (!markdown) return { page: null, links: [...links] };
+  // Same rule as the engine path: an HTTP error page with thin content is server
+  // boilerplate — harvest its links, never keep its body.
+  if (!markdown || (res.status >= 400 && contentWordLen(markdown) < 200)) {
+    return { page: null, links: [...links] };
+  }
   return {
     page: {
       url,

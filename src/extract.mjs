@@ -8,13 +8,26 @@ import { gfm } from 'turndown-plugin-gfm';
 
 // Elements that are site chrome, never content. Removed from within the chosen
 // content node before conversion.
+//
+// The list holds ONLY unambiguous, never-in-content signals (rule: never lose
+// content). Deliberately NOT here, because each one names real content on some
+// site and the link-density pruner below already removes the navigational case:
+//   - `.menu`         → a restaurant's FOOD menu ("extract the pizzas" — the #1 task);
+//                       a link-dense site menu is caught by pruneNavByLinkDensity.
+//   - `.banner` / `.announcement` → real announcements (schools, status pages, docs
+//                       deprecation notices).
+//   - `form`          → booking calendars, order-able menus, configurators and search
+//                       result filters LIVE inside forms; inputs render to almost no
+//                       Markdown anyway, so keeping forms costs ~nothing.
+//   - `header`        → an <article>'s own <header> is its title/byline (content);
+//                       only the site masthead is chrome — handled separately below.
 const CHROME_SELECTORS = [
   'script', 'style', 'noscript', 'svg', 'template', 'iframe',
-  'nav', 'aside', 'footer', 'header', 'form',
+  'nav', 'aside', 'footer',
   '[role=navigation]', '[role=banner]', '[role=contentinfo]', '[role=search]',
-  '.sidebar', '.navbar', '.nav', '.menu', '.toc', '.table-of-contents',
+  '.sidebar', '.navbar', '.nav', '.toc', '.table-of-contents',
   '.breadcrumb', '.breadcrumbs', '.pagination', '.pager',
-  '.cookie', '.cookies', '.cookie-banner', '.announcement', '.banner',
+  '.cookie', '.cookies', '.cookie-banner',
   '.edit-this-page', '.theme-doc-toc', '.theme-doc-footer', '.pagination-nav',
   '.skip-link', '.skip-to-content',
   // heading permalink anchors (Docusaurus/VitePress/MkDocs/devsite/…)
@@ -271,6 +284,12 @@ export function extractMarkdown(html, { contentSelector, baseUrl, title } = {}) 
   // Strip chrome from inside the chosen node.
   for (const sel of CHROME_SELECTORS) {
     for (const n of content.querySelectorAll(sel)) n.remove();
+  }
+  // <header> is chrome ONLY as a site masthead. Inside an <article> it is that
+  // article's own title/byline block — spec-blessed content (HTML5 sectioning) that
+  // a blanket removal used to silently delete from every blog/news page.
+  for (const n of content.querySelectorAll('header')) {
+    if (!n.closest('article')) n.remove();
   }
 
   // Drop data-URI / inline-SVG images. Sites embed decorative gradients, blurs

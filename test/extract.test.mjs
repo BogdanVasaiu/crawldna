@@ -60,6 +60,34 @@ test('#8 link-density pruning: a bare link list is dropped, a described list sur
   assert.ok(kept.includes('first resource'), 'a content list (links + descriptions) must be preserved');
 });
 
+test('content-ambiguous containers are NEVER stripped as chrome (menu/announcement/form)', () => {
+  const html = `<html><body><main>
+    <h1>La Nostra Pizzeria</h1>
+    <div class="menu"><h2>Pizze Rosse</h2><p>Margherita — €6.50</p><p>Diavola — €8.00</p></div>
+    <div class="announcement"><p>School closed on Friday for maintenance.</p></div>
+    <form><label>Choose a slot</label><p>Monday 9:00 — 2 places free</p></form>
+  </main></body></html>`;
+  const { markdown } = extractMarkdown(html);
+  assert.ok(markdown.includes('Margherita — €6.50'), 'a .menu food menu is content, not chrome');
+  assert.ok(markdown.includes('School closed on Friday'), 'an .announcement can be real content');
+  assert.ok(markdown.includes('Monday 9:00'), 'form-wrapped content (booking/order flows) must survive');
+});
+
+test('header removal is article-aware: masthead dropped, an article\'s own header kept', () => {
+  const html = `<html><body><main>
+    <header>Global Site Header With Menu Links And More Chrome Text</header>
+    <article>
+      <header><h1>Post Title</h1><p>By Jane Doe</p></header>
+      <p>The actual body prose of the article, long enough to matter here.</p>
+    </article>
+  </main></body></html>`;
+  const { markdown } = extractMarkdown(html);
+  assert.ok(!markdown.includes('Global Site Header'), 'site masthead is chrome');
+  assert.ok(markdown.includes('Post Title'), "an article's own header is content");
+  assert.ok(markdown.includes('By Jane Doe'));
+  assert.ok(markdown.includes('actual body prose'));
+});
+
 test('data-URI images dropped, real-URL images kept, toolbar links stripped', () => {
   const html = `<html><body><main><h1>T</h1>
     <p><img src="data:image/svg+xml,%3Csvg%3E..." alt="deco"><img src="https://ex.com/pic.png" alt="pic"></p>

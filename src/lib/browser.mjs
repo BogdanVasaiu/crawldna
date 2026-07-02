@@ -189,6 +189,26 @@ export async function closeBrowser() {
   }
 }
 
+// --- run-scoped ownership of the shared browser ------------------------------
+// The browser is ONE process shared by every crawl in this Node process. A run
+// that closed it unconditionally when it finished would pull it out from under a
+// run still using it — exactly what happened when the UI stopped a crawl and
+// immediately started the next one (the old run's cleanup killed the new run's
+// pages). So runs RETAIN the browser for their lifetime and only the LAST release
+// actually closes it.
+let _retainers = 0;
+
+/** Mark a run as using the shared browser. Pair with releaseBrowser(). */
+export function retainBrowser() {
+  _retainers++;
+}
+
+/** Release a run's hold; closes the browser once no run holds it. */
+export async function releaseBrowser() {
+  _retainers = Math.max(0, _retainers - 1);
+  if (_retainers === 0) await closeBrowser();
+}
+
 let _installTried = false;
 
 /**

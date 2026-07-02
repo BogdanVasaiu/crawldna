@@ -4,6 +4,17 @@
   "description": "General, task-driven web crawler that reveals interaction-hidden content and outputs clean Markdown.",
   "type": "module",
   "license": "MIT",
+  "author": "BogdanVasaiu",
+  "keywords": [
+    "crawler",
+    "scraper",
+    "markdown",
+    "ai",
+    "llm",
+    "playwright",
+    "documentation",
+    "extraction"
+  ],
   "main": "./src/index.mjs",
   "types": "./index.d.ts",
   "exports": {
