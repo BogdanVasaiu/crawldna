@@ -45,6 +45,14 @@ export interface CrawlOptions {
   /** Skip URLs matching this pattern. */
   exclude?: string | RegExp;
   /**
+   * Cap on the speculative JS-mined route candidates (paths dug out of script/JSON
+   * blobs, up to 800 per page) sent to the AI link gate, top-ranked by task
+   * relevance. `0` = unlimited. Default `200`. Conservative: only cuts when the
+   * relevance scores discriminate among the routes — a generic task cuts nothing —
+   * and real DOM links are never capped.
+   */
+  maxRoutes?: number;
+  /**
    * Focused mode (opt-in): prune links whose task-relevance score (`0..1`) falls below
    * this threshold BEFORE the AI link gate. `0` (default) = off — relevance then only
    * orders links best-first and never drops any. Trades some recall for speed/scope,
@@ -226,6 +234,7 @@ export declare const DEFAULT_OPTIONS: Required<
     | 'concurrency'
     | 'maxPages'
     | 'maxActions'
+    | 'maxRoutes'
     | 'minRelevance'
     | 'nearDupHamming'
     | 'save'

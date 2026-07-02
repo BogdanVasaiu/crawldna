@@ -213,6 +213,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `concurrency` | `4` | parallel page fetches |
 | `maxPages` | `0` | safety cap (0 = unlimited) |
 | `maxActions` | `40` | per-page reveal action cap (a ceiling — simple pages stop early) |
+| `maxRoutes` | `200` | cap on speculative JS-mined route candidates sent to the AI link gate, top-ranked by task relevance (`0` = unlimited; only cuts when the scores discriminate; real DOM links are never capped) |
 | `include` | — | only crawl URLs matching (string regex or `RegExp`) |
 | `exclude` | — | skip URLs matching |
 | `save` | `false` | persist the run to the cache. **Library default: off** (result returned in memory). The CLI/UI turn it on |

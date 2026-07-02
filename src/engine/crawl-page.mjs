@@ -93,6 +93,40 @@ export async function decideFollow(ctx, task, candidateObjs) {
   return keep;
 }
 
+/**
+ * #16 — budget the SPECULATIVE JS-mined routes that reach the AI link gate.
+ * perceive() mines up to 800 same-site paths per page from script/JSON blobs:
+ * real router manifests mixed with build/chunk noise. They all pass scope, so
+ * they all used to be judged by the model in batches of 160 — up to 5 extra
+ * calls per page spent mostly on `/static/chunk-…`. Rank them by task
+ * relevance (scoreLink — universal, task-driven, no URL-shape rules) and keep
+ * only the top `maxRoutes`.
+ *
+ * Conservative by construction (rule #1): the cut happens ONLY when the scores
+ * actually discriminate among the routes (min < max). A generic task scores
+ * everything 1 and an off-vocabulary task scores everything 0 — no variance,
+ * no cut, today's behaviour. Ties keep mined order (deterministic). DOM links
+ * are NEVER budgeted — this touches only the speculative source, and a cut
+ * route stays reachable via real links / sitemap on any later page.
+ * Pure; exported for the test suite.
+ *
+ * @returns {{ routes: string[], cut: number }}
+ */
+export function budgetRoutes(routes, terms, maxRoutes) {
+  const budget = Math.max(0, Math.floor(Number(maxRoutes) || 0));
+  if (!budget || routes.length <= budget) return { routes, cut: 0 };
+  const scored = routes.map((href, i) => ({ href, i, score: scoreLink(terms, { href }).score }));
+  let min = Infinity;
+  let max = -Infinity;
+  for (const s of scored) {
+    if (s.score < min) min = s.score;
+    if (s.score > max) max = s.score;
+  }
+  if (!(min < max)) return { routes, cut: 0 }; // nothing discriminates → cut nothing
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return { routes: scored.slice(0, budget).map((s) => s.href), cut: routes.length - budget };
+}
+
 /** Dedupe + keep only in-scope http(s) URLs. */
 function inScopeUnique(urls, baseUrl, options) {
   const out = new Map();
@@ -215,16 +249,31 @@ export async function crawlPageWithEngine(target, ctx) {
   let blocks = Array.isArray(revealed.blocks) ? revealed.blocks : null;
 
   // Assemble candidate links: in-content + nav (button-revealed) + popups + JS routes.
-  const candidates = inScopeUnique(
-    [
-      ...revealed.links.map((l) => l.href),
-      ...revealed.navLinks,
-      ...popups,
-      ...revealed.routes,
-    ],
+  // Real destinations (DOM links, revealed nav, popups) are never capped; the
+  // speculative JS-mined routes go through the #16 relevance budget first, and
+  // ones already present as real links don't consume it.
+  const realLinks = inScopeUnique(
+    [...revealed.links.map((l) => l.href), ...revealed.navLinks, ...popups],
     url,
     ctx.options,
   );
+  const realSet = new Set(realLinks);
+  let routes = inScopeUnique(revealed.routes, url, ctx.options).filter((r) => !realSet.has(r));
+  if (routes.length) {
+    const cacheHost = ctx.currentScan || ctx;
+    if (!cacheHost._taskTerms) cacheHost._taskTerms = taskTerms(task);
+    const budgeted = budgetRoutes(routes, cacheHost._taskTerms, ctx.options.maxRoutes);
+    if (budgeted.cut > 0) {
+      ctx.emit({
+        type: 'action',
+        action: 'route-budget',
+        url,
+        detail: `${budgeted.routes.length}/${routes.length} mined routes sent to the link gate (ranked by task relevance)`,
+      });
+    }
+    routes = budgeted.routes;
+  }
+  const candidates = [...realLinks, ...routes];
   const candidateObjs = candidates.map((href) => {
     const found = revealed.links.find((l) => normalizeUrl(l.href) === href);
     return { href, label: found ? found.label : '' };

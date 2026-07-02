@@ -188,7 +188,11 @@ excluded). It produces:
 - **Links** — *every* destination on the page (nav/footer included), verbatim. No
   URL-shape assumptions; the AI decides which are real pages.
 - **Routes** — paths mined from inline scripts / `__NEXT_DATA__` / JSON blobs
-  (pages that exist "in the code" but not the DOM).
+  (pages that exist "in the code" but not the DOM). A speculative source, so it
+  is the only one with a budget (`maxRoutes`, default 200): when the task's
+  relevance scores discriminate among them, only the top-ranked routes reach
+  the AI link gate — build/chunk noise stops burning judgment tokens. DOM links
+  are never capped.
 - **Consent buttons** — for one-time overlay dismissal.
 
 ### 6.3 Reveal ([`reveal.mjs`](src/engine/reveal.mjs)) — **AI-driven**
@@ -384,6 +388,7 @@ special-casing — the engine is universal.
 | `concurrency` | `4` | Parallel page renders |
 | `maxPages` | `0` | Per-scan page cap (0 = unlimited) |
 | `maxActions` | `40` | Per-page reveal action budget (a ceiling; simple pages stop early, disabled controls are skipped) |
+| `maxRoutes` | `200` | Cap on JS-mined route candidates sent to the AI link gate, top-ranked by task relevance (0 = unlimited; only cuts when scores discriminate; DOM links never capped) |
 | `include` / `exclude` | — | Regex URL scope filters |
 | `save` | `false` | Persist the run to the cache. CLI/UI set this; a library call stays in memory unless set (or a `cacheDir` is given) |
 | `cacheDir` | `<cwd>/.sagecrawl/runs` | Where to save when saving is on |

@@ -37,6 +37,11 @@ export const DEFAULT_OPTIONS = {
   // many tabs) need the headroom. Disabled controls are skipped so it isn't wasted.
   include: undefined,
   exclude: undefined,
+  maxRoutes: 200, // #16 — cap on the SPECULATIVE JS-mined routes (perceive digs up to
+  // 800 same-site paths per page out of script/JSON blobs) that reach the AI link
+  // gate, ranked by task relevance first. 0 = unlimited. Conservative: the cut only
+  // happens when the scores discriminate among the routes — a generic task (all 1)
+  // or an off-vocabulary one (all 0) cuts NOTHING. Real DOM links are never capped.
   minRelevance: 0, // FOCUSED MODE (0 = off, precision-first default). When > 0 (0..1),
   // links whose task-relevance score is below this are pruned BEFORE the AI gate — a
   // universal, task-driven way to keep the crawl on-topic without per-site rules. Only
@@ -140,6 +145,7 @@ export function crawlDocs(targets, options = {}) {
   opts.maxPages = Math.max(0, Number(opts.maxPages) || 0);
   opts.maxActions = Math.max(1, Number(opts.maxActions) || 1);
   opts.minRelevance = Math.min(1, Math.max(0, Number(opts.minRelevance) || 0));
+  opts.maxRoutes = Math.max(0, Math.floor(Number(opts.maxRoutes) || 0));
   opts.nearDupHamming = Math.min(64, Math.max(0, Math.floor(Number(opts.nearDupHamming) || 0)));
   // Size the browser-context pool to the concurrency so each worker keeps (and reuses)
   // its own context — the site's shared CSS/JS is then cached across pages instead of

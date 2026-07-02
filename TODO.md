@@ -109,7 +109,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ✅ fatto (2026-07-02) |
 | 14 | Politeness opt-in (delay per host + robots.txt) | affidabilità / reputazione | Basso-Medio | ☐ da fare |
 | 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ✅ fatto (2026-07-02, da verificare dal vivo) |
-| 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ☐ da fare |
+| 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ✅ fatto (2026-07-02, da misurare dal vivo) |
 | 17 | CI GitHub Actions (suite offline a ogni push) | qualità continua | Basso | ✅ fatto (2026-07-02) |
 | 18 | Packaging npm (playwright peer-optional, metadata repo) | fruibilità libreria | Basso | ☐ da fare |
 
@@ -916,7 +916,32 @@ secondi; su pagine di riferimento il Markdown estratto resta byte-identico (harn
 ---
 
 ## #16 — Budget/ranking per le route minate dai JS
-**Effetto:** consumi (token del gate `links`) · **Sforzo:** Basso · **Stato:** ☐
+**Effetto:** consumi (token del gate `links`) · **Sforzo:** Basso · **Stato:** ✅ FATTO (2026-07-02, ⏳ byKind.links dal vivo con #12)
+
+> **Implementato** col pattern del #1 (l'AI resta il giudice, il ranking aiuta).
+> Nuova `budgetRoutes(routes, terms, maxRoutes)` pura in
+> [crawl-page.mjs](src/engine/crawl-page.mjs): le route minate dai blob JS —
+> l'UNICA sorgente speculativa — vengono rankate con `scoreLink` (già esistente,
+> universale, task-driven) e solo le prime `maxRoutes` (default **200**, `0` =
+> illimitato, CLI `--max-routes`) raggiungono il gate AI. I link DOM/nav/popup
+> NON sono mai cappati; una route già presente come link reale non consuma budget.
+> Evento `action: route-budget` quando il taglio avviene (visibile in Activity/CLI).
+>
+> _Guardia conservativa (regola #1), più precisa della proposta:_ il taglio scatta
+> SOLO quando i punteggi **discriminano davvero** tra le route (min < max). Serve
+> perché `scoreLink` dà **1 a tutto** con task generica (non 0): task generica →
+> tutti 1 → nessuna varianza → nessun taglio; task fuori-vocabolario → tutti 0 →
+> idem; caso reale (route doc > 0, `/static/chunk-…` = 0) → varianza → il taglio
+> assorbe il rumore e le route on-task sopravvivono TUTTE. Pareggi in ordine di
+> mining (deterministico). Una route tagliata resta comunque raggiungibile via
+> link DOM/sitemap dalle pagine successive.
+>
+> **Verificato** ([test/route-budget.test.mjs](test/route-budget.test.mjs), 5 test,
+> 114 totali): sotto-budget intatto; sopra-budget con task discriminante le route
+> on-task sopravvivono tutte e il rumore assorbe il taglio (pareggi in ordine
+> stabile); task generica → zero tagli; task fuori-vocabolario → zero tagli;
+> budget 0 = illimitato. ⏳ **Dal vivo:** confermare il calo di `byKind.links` su
+> una SPA di riferimento con set di pagine tenute identico (harness #12).
 
 **Problema oggi.** `perceive` mina fino a **800 path** dai blob JS/JSON della pagina
 ([src/engine/perceive.mjs](src/engine/perceive.mjs)); sono tutti same-site, quindi

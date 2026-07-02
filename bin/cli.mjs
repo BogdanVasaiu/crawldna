@@ -65,6 +65,9 @@ Options:
   --include <regex>      only crawl URLs matching
   --exclude <regex>      skip URLs matching
   --min-relevance <0-1>  focus on task: skip links below this task-relevance (default: ${DEFAULT_OPTIONS.minRelevance} = off)
+  --max-routes <n>       cap the JS-mined route candidates sent to the AI link gate,
+                         top-ranked by task relevance (default: ${DEFAULT_OPTIONS.maxRoutes}; 0 = unlimited;
+                         only cuts when the task discriminates — DOM links are never capped)
   --ollama-host <url>    Ollama server URL (default: http://127.0.0.1:11434)
   --cache-dir <dir>      override the runs-cache location
   --per-document         also emit one identifiable .md per page + index.md + a JSONL
@@ -108,6 +111,7 @@ const OPTION_CONFIG = {
   include: { type: 'string' },
   exclude: { type: 'string' },
   'min-relevance': { type: 'string' },
+  'max-routes': { type: 'string' },
   'ollama-host': { type: 'string' },
   'cache-dir': { type: 'string' },
   'per-document': { type: 'boolean' },
@@ -160,6 +164,7 @@ function optionsFromFlags(values) {
   if (values.include) o.include = values.include;
   if (values.exclude) o.exclude = values.exclude;
   if (values['min-relevance'] != null) o.minRelevance = Number(values['min-relevance']);
+  if (values['max-routes'] != null) o.maxRoutes = Number(values['max-routes']);
   if (values['ollama-host']) o.ollamaHost = values['ollama-host'];
   if (values['cache-dir']) o.cacheDir = values['cache-dir'];
   if (values['per-document']) o.perDocument = true;
