@@ -19,6 +19,7 @@
 // These functions take an `llm` descriptor ({ provider, model, baseUrl, apiKey })
 // and never care whether it is backed by Ollama or an OpenAI-compatible API.
 import { chat } from '../lib/llm.mjs';
+import { selectRelevant } from '../lib/retrieve.mjs';
 
 /** Pull the first JSON value out of a model reply. */
 function parseJson(text) {
@@ -33,6 +34,13 @@ function parseJson(text) {
     return null;
   }
 }
+
+// PROMPT-CACHE CONTRACT (#4): every judgment call's SYSTEM prompt below is a plain
+// string literal — byte-identical across all calls of its type. That identity is what
+// lets remote providers (OpenAI, DeepSeek, vLLM, OpenRouter) serve the repeated prefix
+// from their prompt cache (~10× cheaper input) on a crawl's thousands of calls. Keep
+// per-call data (task, page text, links, controls) in the USER message — never
+// interpolate it into a system prompt. Locked by a test (decide.test.mjs).
 
 // JSON shapes the crawl-judgment calls must return. Passed to the transport for
 // CONSTRAINED DECODING (Ollama `format`) / guaranteed JSON (OpenAI `response_format`),
@@ -92,6 +100,13 @@ function parseReshape(text) {
     let content = m[2].replace(/^\s*\n/, '').replace(/\s+$/, '');
     const fence = content.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i);
     if (fence) content = fence[1];
+    // A local model sometimes DOUBLES the block markers (a nested `===FILE: …===`
+    // first line and a stray `===END` fragment at the end) — strip them so the
+    // artefact never leaks into the saved file.
+    content = content
+      .replace(/^===FILE:[^\n]*===\s*\r?\n/, '')
+      .replace(/\r?\n={2,}\s*END=*\s*$/, '')
+      .trim();
     if (filename && content.trim()) out.files.push({ filename, content });
   }
   replyParts.push(raw.slice(last));
@@ -140,6 +155,7 @@ function docLabel(d, i, kind) {
     d.bytes || d.bytes === 0 ? `${d.bytes} bytes` : '',
     d.title ? `titled "${d.title}"` : '',
     d.sources && d.sources.length ? `crawled from ${d.sources.join(' , ')}` : '',
+    d.partial ? 'PARTIAL EXTRACT — only the sections relevant to this request are shown' : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -182,14 +198,25 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
   let docs = Array.isArray(documents) ? documents : null;
   if (!docs) docs = String(corpus || '').trim() ? [{ filename: '', content: String(corpus) }] : [];
   docs = docs.filter((d) => String(d.content || '').trim());
-  if (!docs.length) return { reply: 'There is no extracted content to work from yet.', files: [], truncated: false };
+  if (!docs.length) return { reply: 'There is no extracted content to work from yet.', files: [], truncated: false, contextMode: 'full' };
 
-  // Originals first and in full priority; trim only if they exceed the cap.
-  let sourcesBlock = renderDocs(docs, 'SOURCE DOCUMENT');
-  let truncated = false;
+  // #11 root cause: when the sources exceed the model budget, RETRIEVE the sections
+  // relevant to the instruction instead of blindly sending the first RESHAPE_CAP chars.
+  // The blind head-slice is what made the model "answer" out-of-budget topics from its
+  // own memory (a fabricated v-alert props table, live). Verbatim subsets, document
+  // order preserved, omissions marked; 'head' mode = the legacy slice, kept only when
+  // nothing in the instruction discriminates (e.g. "tidy everything up").
+  const sel = selectRelevant(docs, instruction, RESHAPE_CAP);
+  let contextMode = sel.mode;
+  let truncated = sel.truncated;
+  let sourcesBlock = renderDocs(sel.docs, 'SOURCE DOCUMENT');
   if (sourcesBlock.length > RESHAPE_CAP) {
     sourcesBlock = sourcesBlock.slice(0, RESHAPE_CAP);
     truncated = true;
+    if (contextMode === 'full') contextMode = 'head';
+  }
+  if (sel.omittedDocs > 0) {
+    sourcesBlock += `\n\n(${sel.omittedDocs} other source document(s) contained nothing relevant to this request and were omitted.)`;
   }
   // Prior chat outputs as secondary context, only with whatever budget remains so
   // they can never crowd out the originals.
@@ -205,6 +232,10 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
     '- The SOURCE DOCUMENTS are your only source of facts AND the DEFAULT thing to work on. When ' +
     'the user says "the original", "the original md", a filename, or a size (e.g. "the 4574 bytes ' +
     'file"), they mean the matching SOURCE DOCUMENT — operate on THAT document.\n' +
+    '- NEVER supply a fact, value, prop, price, example or code snippet from your own knowledge ' +
+    'of the site, product or framework — even when you are confident you know it. If the SOURCE ' +
+    'DOCUMENTS do not contain what the user asks for, say so plainly ("the extraction does not ' +
+    'contain X") — an honest gap beats an invented answer every time.\n' +
     '- Never invent, add, infer or alter a value: keep every name, number, price, time, URL and ' +
     'string EXACTLY as written. You may select, drop, reorder, regroup, reformat (e.g. into a ' +
     'Markdown table) and tidy the layout — but never change the actual content or values.\n' +
@@ -256,11 +287,12 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
         '. Check the selected model, and (for an API provider) the base URL and API key.',
       files: [],
       truncated,
+      contextMode,
     };
   }
   const parsed = parseReshape(ans);
   if (!parsed.reply && !parsed.files.length) {
-    return { reply: 'The model did not return a usable response. Try rephrasing, or check the model is reachable.', files: [], truncated };
+    return { reply: 'The model did not return a usable response. Try rephrasing, or check the model is reachable.', files: [], truncated, contextMode };
   }
   // "Auto" mode safety net: if the model answered with document-worthy content but
   // didn't wrap it in a FILE BLOCK, promote that content to a saved document so the
@@ -269,7 +301,7 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
     parsed.files.push({ filename: deriveDocName(instruction, parsed.reply), content: parsed.reply });
     parsed.reply = '';
   }
-  return { ...parsed, truncated };
+  return { ...parsed, truncated, contextMode };
 }
 
 // =========================================================================

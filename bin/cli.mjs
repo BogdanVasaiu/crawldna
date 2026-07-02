@@ -73,6 +73,9 @@ Options:
 Reshape (Phase 2 — over a saved run):
   --ask <text>           the reshape request, e.g. "make a table of the prices"
   --scan <id>            which link of the run to reshape (default: the only/first)
+  --no-verify            skip the fidelity check (default: every produced file's values
+                         — numbers, URLs, code, quoted strings — are verified against
+                         the crawled sources; unverifiable ones are flagged in the file)
 
 Examples:
   sagecrawl https://docusaurus.io/docs --task "Extract all documentation"
@@ -108,6 +111,7 @@ const OPTION_CONFIG = {
   port: { type: 'string' },
   ask: { type: 'string' },
   scan: { type: 'string' },
+  'no-verify': { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
 };
 
@@ -273,18 +277,33 @@ async function reshapeCommand(args, values) {
       baseUrl: values['base-url'],
       apiKey: values['api-key'],
       cacheDir: values['cache-dir'],
+      verify: !values['no-verify'],
     });
     if (out.reply) process.stdout.write('\n' + out.reply + '\n');
     if (out.files.length) {
       process.stdout.write(`\n${c(C.bold, 'Files')}  ${c(C.dim, '(saved under the run’s chat/ folder)')}\n`);
       for (const f of out.files) {
         process.stdout.write(`  ${c(C.green, '✓')} ${f.filename} ${c(C.dim, `(${f.bytes}b)`)}\n`);
+        const fid = f.fidelity;
+        if (fid && fid.unverified && fid.unverified.length) {
+          process.stdout.write(
+            `    ${c(C.yellow, `⚠ ${fid.unverified.length}/${fid.checked} value(s) not found in the crawled sources`)} ` +
+              c(C.dim, '— possibly invented; see the warning inside the file\n'),
+          );
+        }
       }
     } else {
       process.stdout.write(c(C.dim, '\n(no files produced — the model answered without emitting any)\n'));
     }
     if (out.truncated) {
-      process.stdout.write(c(C.yellow, '\n⚠ only the first part of a large extraction was used\n'));
+      process.stdout.write(
+        c(
+          C.yellow,
+          out.contextMode === 'retrieval'
+            ? '\n⚠ the sources exceed the model budget — only the sections relevant to your request were sent\n'
+            : '\n⚠ only the first part of a large extraction was used (nothing in the request narrows it down)\n',
+        ),
+      );
     }
   } catch (err) {
     process.stderr.write(c(C.red, 'reshape failed: ' + (err && err.message ? err.message : err) + '\n'));

@@ -19,6 +19,8 @@ import {
 import { aiReshape } from './engine/decide.mjs';
 import { resolveLlm } from './lib/llm.mjs';
 import { slug } from './lib/url.mjs';
+import { verifyValues, fidelityBanner, stripFidelityBanner } from './lib/faithful.mjs';
+import { simhash, hamming } from './lib/simhash.mjs';
 
 // How many of the user's own prior chat outputs to surface back as context, so a
 // follow-up like "redo the table you made" can reference them without flooding
@@ -65,9 +67,13 @@ function findScan(manifest, scanId) {
  * @param {string} [a.baseUrl]  OpenAI-compatible API base URL (provider 'openai')
  * @param {string} [a.apiKey]   API key (provider 'openai')
  * @param {string} [a.cacheDir] runs-cache override
- * @returns {Promise<{ reply: string, files: Array<{ filename, bytes, at }>, truncated: boolean }>}
+ * @param {boolean} [a.verify]  #11 fidelity check (default true): value-like atoms of
+ *                              every produced file are verified against the FULL crawled
+ *                              sources; unverifiable ones are flagged with a warning
+ *                              banner inside the file instead of served silently.
+ * @returns {Promise<{ reply: string, files: Array<{ filename, bytes, at, fidelity? }>, truncated: boolean, contextMode?: string }>}
  */
-export async function reshape({ runId, scanId = '', message, model, provider, host, baseUrl, apiKey, cacheDir }) {
+export async function reshape({ runId, scanId = '', message, model, provider, host, baseUrl, apiKey, cacheDir, verify = true }) {
   if (!String(message || '').trim()) throw new Error('empty message');
   if (!model) throw new Error('no model selected');
   const llm = resolveLlm({ provider, model, ollamaHost: host, baseUrl, apiKey });
@@ -107,13 +113,19 @@ export async function reshape({ runId, scanId = '', message, model, provider, ho
   const produced = [];
   for (const f of (session.files || []).slice(-PRODUCED_CONTEXT)) {
     try {
-      produced.push({ filename: f.filename, bytes: f.bytes, content: stripFrontMatter(await readChatFile(runId, sid, f.filename, opts)) });
+      // Strip our own fidelity banner: it is a warning for the USER, not content the
+      // model should iterate on (or copy into new files).
+      produced.push({
+        filename: f.filename,
+        bytes: f.bytes,
+        content: stripFidelityBanner(stripFrontMatter(await readChatFile(runId, sid, f.filename, opts))),
+      });
     } catch {
       /* a derived file may have been removed — skip it */
     }
   }
 
-  const { reply, files, truncated } = await aiReshape({
+  const { reply, files, truncated, contextMode } = await aiReshape({
     llm,
     documents,
     produced,
@@ -121,15 +133,52 @@ export async function reshape({ runId, scanId = '', message, model, provider, ho
     history: (session.messages || []).map((m) => ({ role: m.role, content: m.content })),
   });
 
-  // Persist any produced files under the scan's chat folder, with stable names.
+  // Deterministic guards on what the model produced, BEFORE anything is saved.
+  //
+  // (1) RE-EMISSION FILTER: models re-deliver earlier files under new names as the
+  // conversation grows (observed live: three near-identical "pagination" docs in one
+  // chat). A produced file whose SimHash is within Hamming 3 of a file already in this
+  // chat (or of another file from this same turn) is skipped, with a note — never
+  // silently.
+  //
+  // (2) FIDELITY CHECK (#11): every value-like atom (numbers, URLs, inline code, quoted
+  // literals, code lines) of a kept file is verified against the FULL crawled sources —
+  // not the model's context — plus the user's own instruction. Unverifiable values are
+  // flagged with a clearly tool-generated banner INSIDE the file, and reported in the
+  // result, instead of being served as if they were extracted facts.
+  const sourceTexts = documents.map((d) => d.content);
+  const priorHashes = produced.map((p) => simhash(p.content));
   const used = new Set((session.files || []).map((f) => f.filename));
   const savedFiles = [];
+  const notes = [];
   for (const file of files) {
+    const raw = String(file.content);
+    const sh = simhash(raw);
+    if (priorHashes.some((h) => hamming(sh, h) <= 3)) {
+      notes.push(`(Skipped "${file.filename}" — near-identical to a file already produced in this chat.)`);
+      continue;
+    }
+    priorHashes.push(sh);
+
+    let fidelity = null;
+    let content = raw;
+    if (verify) {
+      const v = verifyValues(raw, sourceTexts, { allow: message });
+      fidelity = { checked: v.total, verified: v.verified, unverified: v.unverified.slice(0, 20) };
+      if (v.unverified.length) content = fidelityBanner(v) + '\n\n' + raw;
+    }
+
     const name = sanitizeChatName(file.filename, used);
-    const content = ensureTrailingNewline(file.content);
-    await writeChatFile(runId, sid, name, content, opts);
-    savedFiles.push({ filename: name, bytes: Buffer.byteLength(content, 'utf8'), at: new Date().toISOString() });
+    const body = ensureTrailingNewline(content);
+    await writeChatFile(runId, sid, name, body, opts);
+    savedFiles.push({
+      filename: name,
+      bytes: Buffer.byteLength(body, 'utf8'),
+      at: new Date().toISOString(),
+      ...(fidelity ? { fidelity } : {}),
+    });
   }
+  const replyOut = [reply, ...notes].filter(Boolean).join('\n\n');
 
   // Record the turn (user + assistant) and register the new files.
   const now = new Date().toISOString();
@@ -137,14 +186,14 @@ export async function reshape({ runId, scanId = '', message, model, provider, ho
   session.messages.push({ role: 'user', content: String(message), at: now });
   session.messages.push({
     role: 'assistant',
-    content: reply,
+    content: replyOut,
     files: savedFiles.map((f) => f.filename),
     at: now,
   });
   session.files = [...(session.files || []), ...savedFiles];
   await saveChatSession(runId, sid, session, opts);
 
-  return { reply, files: savedFiles, truncated };
+  return { reply: replyOut, files: savedFiles, truncated, contextMode };
 }
 
 export default reshape;

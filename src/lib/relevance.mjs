@@ -67,8 +67,9 @@ export function taskTerms(task) {
 
 /** Does link-token `l` satisfy task-term `t`? Exact match, or a shared prefix for
  *  longer words so "price"/"prices" and "document"/"documentazione" still connect — a
- *  light, language-agnostic stemming with no per-language rules. */
-function termHit(t, l) {
+ *  light, language-agnostic stemming with no per-language rules.
+ *  (Exported for reuse by the reshape context retrieval, lib/retrieve.mjs.) */
+export function termHit(t, l) {
   if (l === t) return true;
   return t.length >= 4 && l.length >= 4 && (l.startsWith(t) || t.startsWith(l));
 }

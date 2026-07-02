@@ -5,13 +5,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { aiSelectLinks, aiScopeContent, aiSelectRevealers, aiPlanNavigation } from '../src/engine/decide.mjs';
+import { aiSelectLinks, aiScopeContent, aiSelectRevealers, aiPlanNavigation, aiReshape } from '../src/engine/decide.mjs';
 import { decideFollow } from '../src/engine/crawl-page.mjs';
 
 // --- local OpenAI-compatible stub -------------------------------------------
 let handler = () => '{}'; // (prompt) => model reply content, or 'FAIL' → HTTP 500
 let calls = 0;
 let prompts = [];
+let systems = [];
 const server = http.createServer((req, res) => {
   let data = '';
   req.on('data', (c) => (data += c));
@@ -19,7 +20,9 @@ const server = http.createServer((req, res) => {
     calls++;
     let prompt = '';
     try {
-      prompt = JSON.parse(data).messages.at(-1).content;
+      const msgs = JSON.parse(data).messages;
+      prompt = msgs.at(-1).content;
+      systems.push(msgs[0].content);
     } catch {
       /* keep '' */
     }
@@ -46,6 +49,7 @@ const reset = (h) => {
   handler = h;
   calls = 0;
   prompts = [];
+  systems = [];
 };
 const links = (n) => Array.from({ length: n }, (_, i) => ({ href: `https://s.it/p${i}`, label: `L${i}` }));
 // reply that follows EVERY destination listed in the prompt
@@ -158,6 +162,57 @@ test('aiScopeContent keep-bias: empty selection or garbage → the whole page su
   assert.equal((await aiScopeContent({ llm, task: 't', title: '', markdown: sectioned })).markdown, sectioned);
   reset(() => 'not json at all');
   assert.equal((await aiScopeContent({ llm, task: 't', title: '', markdown: sectioned })).markdown, sectioned);
+});
+
+// --- prompt-cache contract (#4) ------------------------------------------------
+
+test('system prompts are BYTE-IDENTICAL across calls of the same type (prompt-cache prefix)', async () => {
+  // Per-call data must live in the USER message only — an interpolated system prompt
+  // would silently kill provider-side prefix caching on thousands of crawl calls.
+  reset(() => '{"follow":[]}');
+  await aiSelectLinks({ llm, task: 'estrai il menu delle pizze', links: links(3) });
+  await aiSelectLinks({ llm, task: 'a completely different documentation task', links: links(7) });
+  assert.equal(typeof systems[0], 'string');
+  assert.equal(systems[0], systems[1], 'aiSelectLinks system prompt must not vary per call');
+
+  reset(() => '{"click":[]}');
+  const cand = (l) => [{ signature: `x|${l}|`, kind: 'tab', label: l }];
+  await aiSelectRevealers({ llm, task: 'task one', candidates: cand('A') });
+  await aiSelectRevealers({ llm, task: 'task two', candidates: cand('B') });
+  assert.equal(systems[0], systems[1], 'aiSelectRevealers system prompt must not vary per call');
+
+  reset(() => '{"keep":[]}');
+  await aiScopeContent({ llm, task: 'menu', title: 'T1', markdown: sectioned });
+  await aiScopeContent({ llm, task: 'prezzi', title: 'T2', markdown: sectioned });
+  assert.equal(systems[0], systems[1], 'aiScopeContent system prompt must not vary per call');
+
+  reset(() => '{"direction":null,"target":null}');
+  const ctrl = [{ signature: 's', kind: 'control', label: 'next' }];
+  await aiPlanNavigation({ llm, task: 'settembre', current: { title: 'a' }, controls: ctrl });
+  await aiPlanNavigation({ llm, task: 'ottobre', current: { title: 'b' }, controls: ctrl });
+  assert.equal(systems[0], systems[1], 'aiPlanNavigation system prompt must not vary per call');
+});
+
+// --- aiReshape (file-block parsing robustness) --------------------------------
+
+test('aiReshape strips doubled/nested FILE markers a local model leaks into a block', async () => {
+  reset(
+    () =>
+      '===FILE: outer.md===\n' +
+      '===FILE: inner.md===\n' +
+      '# Real Content\n\nThe deliverable body.\n' +
+      '===END\n' +
+      '===END===',
+  );
+  const out = await aiReshape({
+    llm,
+    instruction: 'make the doc',
+    documents: [{ filename: 'src.md', content: 'The deliverable body lives here.' }],
+  });
+  assert.equal(out.files.length, 1);
+  assert.equal(out.files[0].filename, 'outer.md');
+  assert.ok(out.files[0].content.startsWith('# Real Content'), 'nested FILE marker must be stripped');
+  assert.ok(!out.files[0].content.includes('==='), 'no stray marker fragments in the content');
 });
 
 // --- aiSelectRevealers / aiPlanNavigation -------------------------------------
