@@ -8,7 +8,9 @@
 > FIRE-1, Skyvern, browser-use) + ricerca accademica, incrociata col nostro codice
 > (item #1–#12); revisione ingegneristica integrale del codice (2026-07-02, Claude
 > Fable) → correzioni applicate + item #13–#18 (vedi la sezione "Revisione
-> ingegneristica completa — 2026-07-02").
+> ingegneristica completa — 2026-07-02"); sessione architetturale 2026-07-02
+> (modalità no-AI, parametri espliciti al posto dello sniffing della task, reveal
+> a ciclo chiuso, embeddings) → item #19–#22 (Gruppo D).
 > Vedi anche [ARCHITECTURE.md](ARCHITECTURE.md) e [build-spec.md](build-spec.md).
 
 ---
@@ -50,6 +52,14 @@ Chi implementa un punto DEVE rispettare questi principi, anche a costo di fare d
    ammessi come rete di sicurezza, ma il giudice primario resta l'AI.
 5. **Dipendenze minime.** Preferire JS puro / Node built-in. Niente dipendenze pesanti
    nel core senza un buon motivo.
+6. **Il testo libero non pilota mai il motore** (deciso 2026-07-02). La task parla SOLO
+   all'AI (e nomina l'output); ogni switch di comportamento (profilo/completezza, focus,
+   no-AI) è un **parametro esplicito** scelto dall'utente — mai una regex che sniffa la
+   prosa. Corollario: la modalità **no-AI è sacra — zero chiamate a QUALSIASI modello**
+   (chat ED embeddings); il click engine resta completo, si rinuncia solo alle decisioni
+   tieni/scarta. Le due visioni da rispettare in ogni item: **AI** = trova, naviga,
+   clicca ed estrae ciò che conta per la task; **no-AI** = stesso click engine, nessuna
+   decisione su cosa tenere (si tiene tutto).
 
 **Come verificare di non aver perso nulla** (per gli item a rischio): rifare un crawl
 di riferimento (es. Firebase web, o un sito calendario tipo ACI Cremona) *prima e dopo*
@@ -107,11 +117,22 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | # | Titolo | Effetto | Sforzo | Stato |
 |---|--------|---------|--------|-------|
 | 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ✅ fatto (2026-07-02) |
-| 14 | Politeness opt-in (delay per host + robots.txt) | affidabilità / reputazione | Basso-Medio | ☐ da fare |
+| 14 | Politeness opt-in (delay/robots) + rilevamento anti-bot/challenge | affidabilità / reputazione | Basso-Medio | ☐ da fare |
 | 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ✅ fatto (2026-07-02, da verificare dal vivo) |
 | 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ✅ fatto (2026-07-02, da misurare dal vivo) |
 | 17 | CI GitHub Actions (suite offline a ogni push) | qualità continua | Basso | ✅ fatto (2026-07-02) |
 | 18 | Packaging npm (playwright peer-optional, metadata repo) | fruibilità libreria | Basso | ☐ da fare |
+
+**Gruppo D — Architettura esplicita & no-AI** (sessione 2026-07-02; ogni item deve
+rispettare: miglioramento netto qualità/costo/velocità a precisione invariata · usabile
+come libreria · sinergia con le componenti esistenti · entrambe le visioni AI/no-AI)
+
+| # | Titolo | Effetto | Sforzo | Stato |
+|---|--------|---------|--------|-------|
+| 19 | Modalità no-AI (crawl a zero chiamate modello) | fruibilità + costi | Basso | ✅ fatto (2026-07-02, da committare) |
+| 20 | `mode` esplicito (complete/targeted) — via lo sniffing della task | architettura + costi (−gate/scope in complete) | Medio | ☐ da fare |
+| 21 | Reveal a ciclo chiuso (misura, non giudizio) | precisione reveal — la missione | Medio-Alto | ☐ da fare |
+| 22 | Tier embeddings (`embedModel`) — ranking semantico multilingua | qualità ranking + Reshape | Medio | ☐ da fare |
 
 **Da fare per primi (qualità del crawl):** #1, #2, #3. *(fatti)*
 **Per dimostrare il valore (misurabile):** #12. *(fatto)*
@@ -134,6 +155,18 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 7. **#18 packaging npm** — agganciato al momento del publish.
 8. **#9 accessibility-tree / Set-of-Marks** — per ultimo: sforzo più alto per i casi più
    rari; affrontarlo quando un sito reale mostra un controllo che il path DOM non trova.
+
+### Ordine aggiornato (sessione 2026-07-02 — supersede il precedente per gli item aperti)
+
+0. **Commit del working tree** (non è un item): due commit separati — cambio licenza
+   MIT→AGPL-3.0 (LICENSE, package.json, README) e modalità no-AI #19 (core, CLI, UI,
+   test, README). Va fatto PRIMA di toccare altro, il tree è sporco.
+1. **#20 `mode` esplicito** — è il pezzo architetturale: #21 e #22 ci si appoggiano.
+2. **#21 reveal a ciclo chiuso** — il cuore della missione ("mai perdere contenuto"
+   diventa misurato, non sperato). Il fix consent è urgente: bug reale anche in AI mode.
+3. **#22 tier embeddings** — il boost semantico, dopo che la base è pulita.
+4. Poi si torna all'ordine precedente per gli item aperti: #14 politeness → #6
+   incrementale → #18 packaging → #9 accessibility-tree.
 
 ---
 
@@ -870,25 +903,43 @@ salvataggio è off.
 
 ---
 
-## #14 — Politeness opt-in (delay per host + robots.txt)
+## #14 — Politeness opt-in (delay/robots) + rilevamento anti-bot/challenge
 **Effetto:** affidabilità / reputazione · **Sforzo:** Basso-Medio · **Stato:** ☐
 
-**Problema oggi.** Nessun rate-limit per host e nessuna lettura di robots.txt:
-concurrency 4 × reveal martella qualsiasi sito. Per un tool pubblicato su npm è un
-rischio doppio: ban/429 dal sito (= contenuto perso, contro la regola #1) e cattiva
-reputazione del progetto.
+**Problema oggi.** Due facce dello stesso rischio "il sito ci scambia per attività
+sospetta". (1) Nessun rate-limit per host e nessuna lettura di robots.txt: concurrency
+4 × reveal martella qualsiasi sito → ban/429 (= contenuto perso, contro la regola #1) e
+cattiva reputazione per un tool pubblicato su npm. (2) Quando la difesa scatta comunque,
+il sito serve una **pagina-sfida** (Cloudflare "checking your browser", CAPTCHA,
+"unusual traffic", interstitial JS) — spesso con **status 200**: il filtro attuale
+(status ≥400 + testo povero) non la becca, e finirebbe nell'output **come se fosse
+contenuto**, silenziosamente.
 
-**Proposta.** Due opzioni indipendenti, entrambe **opt-in** (il tool resta
-user-directed come wget):
-- `--delay <ms>`: distanza minima tra richieste allo STESSO host (frontiera e fetch).
-- `--respect-robots`: legge `Disallow`/`Crawl-delay` e salta gli URL vietati **con
-  warning** (mai in silenzio — il warning è il contratto).
+**Proposta.**
+- *Politeness, opt-in* (il tool resta user-directed come wget):
+  - `--delay <ms>`: distanza minima tra richieste allo STESSO host (frontiera e fetch).
+  - `--respect-robots`: legge `Disallow`/`Crawl-delay` e salta gli URL vietati **con
+    warning** (mai in silenzio — il warning è il contratto).
+- *Rilevamento challenge, sempre attivo* (è una guardia di PRECISIONE, non una
+  cortesia): riconoscere la pagina-sfida da segnali universali del **challenge**, non
+  del sito (stesso argomento del lessico consent in #21a: si legge l'artefatto della
+  difesa, che è uguale ovunque) — pagina quasi-vuota + widget/iframe captcha noti,
+  marker degli interstitial (meta-refresh + testo "checking/verify", vendor header tipo
+  `cf-mitigated`), 403/429 con corpo-sfida. Comportamento: **mai tenerla come
+  contenuto**, warning esplicito `anti-bot` con l'URL, un solo retry con backoff
+  (rispettando `Retry-After` sui 429, come già fa il transport LLM), poi skip
+  dichiarato. **Mai aggirare** (CAPTCHA/challenge restano fuori scope per sempre,
+  ARCHITECTURE §14 — si segnala, non si buca).
 
 **Criterio di accettazione.** Con delay attivo le richieste same-host distano ≥ delay
 (misurabile dai log); con robots on gli URL disallowed compaiono come warning e non
-come pagine; con entrambe off il comportamento è identico a oggi.
+come pagine; con entrambe off il comportamento è identico a oggi. Per il rilevamento:
+fixture offline di pagine-sfida (200 e 403/429) → nessuna finisce nell'output, ognuna
+produce il warning `anti-bot`; le pagine vere con la parola "captcha" nel TESTO (es.
+una doc che ne parla) NON scattano (serve il widget/marker, non la parola).
 
-**File:** `src/index.mjs` (frontiera), `src/lib/fetcher.mjs`, nuovo `src/lib/robots.mjs`.
+**File:** `src/index.mjs` (frontiera), `src/lib/fetcher.mjs`, `src/engine/crawl-page.mjs`
+(gate contenuto), nuovo `src/lib/robots.mjs`, test con fixture challenge.
 
 ---
 
@@ -1046,6 +1097,163 @@ Playwright (se si sceglie (a)); `npm publish --dry-run` pulito.
 
 ---
 
+## #19 — Modalità no-AI (crawl a zero chiamate modello)
+**Effetto:** fruibilità + costi · **Sforzo:** Basso · **Stato:** ✅ FATTO (2026-07-02, da committare)
+
+> **Implementato.** Opzione `noAi: true` in `DEFAULT_OPTIONS` → `resolveLlm` produce il
+> descrittore provider `'none'` ([src/lib/llm.mjs](src/lib/llm.mjs), predicato
+> `llmDisabled()` + guardia difensiva in `chat()`). Le 4 chiamate di giudizio Fase-1 in
+> [decide.mjs](src/engine/decide.mjs) corto-circuitano PRIMA del transport sui fallback
+> completeness-bias già esistenti: reveal → euristica DOM per-candidato, nav-plan →
+> esplorazione open-ended, scope → pagina intera, links → segue tutto l'in-scope.
+> Health-check saltato, al suo posto un warn `no-ai` una-tantum che spiega il trade-off.
+> CLI `--no-ai` (vale anche per `resume`), UI checkbox "Crawl without AI" (dimma il
+> setup provider/modello, salta la validazione modello, persiste in localStorage).
+> Reshape (Fase 2) resta chat → richiede sempre un modello, by design.
+> **Verificato:** 4 test nuovi (i corto-circuiti danno il risultato giusto con ZERO
+> chiamate al transport — lo stub avrebbe risposto l'opposto), 122/122 verdi; UI provata
+> dal vivo nel preview. README aggiornato (requisiti, CLI, tabella opzioni) con wording
+> onesto: garantisce zero token, NON garantisce più velocità (senza link gate si seguono
+> tutti i link in scope — su un sito grande più pagine, non meno).
+>
+> _Decisioni prese:_ il task resta attivo anche in no-AI nei suoi usi deterministici
+> (ordering, nome file) — vedi però #20 che ne ridefinisce il ruolo; `minRelevance`
+> funziona anche in no-AI (pruning lessicale, testato). **Vincolo permanente (regola
+> #6): no-AI = zero chiamate a QUALSIASI modello, embeddings #22 inclusi.**
+
+---
+
+## #20 — `mode` esplicito (complete/targeted) — via lo sniffing della task
+**Effetto:** architettura + costi (−gate/scope in complete) · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** La task fa due mestieri: istruzione semantica per l'AI E interruttore
+nascosto — la regex `isDocsTask` ([src/lib/task.mjs](src/lib/task.mjs)) sniffa la prosa e
+cambia strategia (profilo docs sitemap/llms-full + niente scoping). Interruttori invisibili
+nel testo libero = comportamento imprevedibile, dipendente dalla lingua, non debuggabile
+(viola la nuova regola #6). Inoltre "docs" è un caso speciale finto: è sempre stato
+"crawl di completezza", valido per qualsiasi sito.
+
+**Proposta.**
+- Opzione **`mode: 'complete' | 'targeted' | 'auto'`** (default `'auto'`):
+  - **`complete`** ("tutto il sito"): scorciatoie docs (llms-full.txt/sitemap) sempre
+    tentate, pagine tenute INTERE, e — la vittoria di costo — **zero chiamate link-gate
+    e zero scoping anche con l'AI accesa** (tenere/scartare non ha senso se l'utente ha
+    chiesto tutto; l'AI resta solo dove serve: reveal + nav-plan). Sicuro PERCHÉ il
+    mirror-dedup #7 è default-on (il follow-everything è esattamente ciò che contiene).
+  - **`targeted`** ("solo ciò che chiede la task"): gate + scoping AI, la visione
+    task-driven piena. **Richiede l'AI** → incompatibile con `noAi`.
+  - **`auto`**: comportamento attuale (regex), SOLO retrocompatibilità per libreria/
+    refdna/run salvate e resume. La UI non lo usa mai.
+- **CLI** `--mode`; **UI**: segmento visibile _"Cosa estrarre: ⦿ Tutto il sito ○ Solo
+  ciò che chiede il task"_; con no-AI attivo "Solo il task" si disabilita da sola e il
+  campo task diventa dichiaratamente opzionale (ruoli residui: istruzione AI in
+  targeted, nome del file output).
+- La matrice delle visioni diventa auto-evidente: complete+AI (reveal AI, zero
+  gate/scope) · complete+noAI (crawler classico + reveal euristico, zero chiamate) ·
+  targeted+AI (la visione piena) · targeted+noAI (⛔ disabilitato).
+
+**Criterio di accettazione.** In `complete` con AI: `byKind.links` e `byKind.scope` = 0,
+set di pagine ≥ dell'attuale profilo docs (più completo: nessun filtro di genere), costo
+token drasticamente più basso (misurare con #12). In `auto`: comportamento byte-identico
+a oggi (test di regressione). `targeted`+`noAi` → errore/disabilitazione chiara, mai
+silenzio. Libreria: opzione piana, default invariato.
+
+**File:** `src/index.mjs` (dispatch profilo), `src/engine/crawl-page.mjs` (scope gate +
+decideFollow), `src/lib/task.mjs` (resta solo per `auto`), `bin/cli.mjs`, `ui/index.html`,
+README/ARCHITECTURE.
+
+---
+
+## #21 — Reveal a ciclo chiuso (misura, non giudizio)
+**Effetto:** precisione reveal — la missione · **Sforzo:** Medio-Alto · **Stato:** ☐
+
+**Problema oggi.** Il loop di reveal esce quando "non trova più controlli approvati" —
+un giudizio (dell'AI o dell'euristica), non una prova. E tre lessici English-only
+minano l'universalità: `CONSENT_RE` (un banner "Accetta tutti"/"Zustimmen" NON viene
+chiuso **nemmeno in modalità AI** — l'overlay può coprire la pagina e rovinare tutto),
+`LOADMORE`, `DISCLOSURE_LABEL` (in no-AI un div "Servizi" con listener ma senza ARIA
+non viene cliccato). Principio guida (dalla sessione 2026-07-02): **non indovinare
+dalle parole (infinite) — misurare il comportamento (universale)**: un elemento ha un
+listener o no; del testo è nascosto o no; un click aggiunge contenuto o no.
+
+**Proposta (quattro pezzi, stesso file).**
+- **(a) Consenso meccanico + multilingue** — URGENTE, bug anche in AI mode: candidato =
+  bottone in overlay vero (già richiesto: fixed/modal) + token "cookie"/"consent" nel
+  testo dell'overlay (quasi universali) + bottone primario per geometria; micro-lessico
+  accept/reject multilingue (~40 parole, legge il BANNER non il sito → ammesso). Nel
+  dubbio preferire il reject (chiude ugualmente, più rispettoso).
+- **(b) Triage arbitrato dalla misura**: un "no" (dell'AI O dell'euristica) viene
+  scavalcato quando dietro il controllo c'è **payload nascosto misurabile** (target di
+  `aria-controls` invisibile con massa di testo, pannelli-sibling nascosti). L'errore
+  del giudice diventa innocuo. In no-AI: approvare TUTTI i candidati meccanicamente
+  plausibili, ordinati per segnali misurati (aria-expanded=false, payload, kind) — un
+  click sprecato costa ~1s, contenuto perso è irrecuperabile (regola #1).
+- **(c) Load-more comportamentale**: un controllo in-place che ha AGGIUNTO contenuto ed
+  esiste ancora → ricliccato fino a saturazione (bounded da maxActions/ADV_CAP, il
+  dedup del BlockAccumulator ferma i cicli A↔B). Via la dipendenza dalla label inglese;
+  `LOADMORE` resta solo come hint di efficienza.
+- **(d) Audit del residuo nascosto = condizione di uscita**: a ogni giro misurare il
+  testo ancora nascosto nel main content (escludendo `<template>`/aria-hidden
+  boilerplate); il loop esce quando **residuo ≈ 0 O budget esaurito**. Il residuo finale
+  va in `page.meta`, `scan.stats` e in un evento → **garanzia di completezza
+  machine-readable, per pagina, anche via libreria**; warning col numero quando resta
+  massa non rivelata ("~3.000 parole dietro controlli non raggiunti — alza
+  --max-actions"). Advisory, mai bloccante (i falsi positivi da boilerplate non
+  bloccano il crawl).
+
+**Criterio di accettazione.** A/B con #12 (`revealCoverage`) su siti reference AI-on vs
+no-AI: il no-AI non perde contenuto noto (paga solo click in più); banner non-inglesi
+chiusi (fixture offline multilingua); residuo=0 sulle pagine reference; ogni gap trovato
+dal vivo diventa un nuovo segnale MECCANICO, non una nuova parola in un lessico.
+_Estensione futura (parcheggiata):_ hover e digitazione nei campi (search/filter) come
+interazioni di reveal — imparentata con #9.
+
+**File:** `src/engine/perceive.mjs`, `src/engine/reveal.mjs`, `src/engine/actions.mjs`,
+`src/eval/` (metrica residuo), test offline con fixture multilingua.
+
+---
+
+## #22 — Tier embeddings (`embedModel`) — ranking semantico multilingua
+**Effetto:** qualità ranking + Reshape · **Sforzo:** Medio · **Stato:** ☐
+
+**Problema oggi.** Tutto il ranking task→link è lessicale ([src/lib/relevance.mjs](src/lib/relevance.mjs)):
+cieco tra lingue (task "estrai i prezzi" su sito tedesco: "Preise" score 0) e sui
+sinonimi ("listino", "tariffe"); il tokenizzatore è ASCII-only (accenti/cirillico/CJK
+distrutti). Riguarda: ordine del frontier, route budget #16, `minRelevance`, e il
+retrieval del Reshape (#11, `termHit` condiviso).
+
+**Proposta.**
+- **`embed(llm, texts)` nel transport** ([src/lib/llm.mjs](src/lib/llm.mjs)): Ollama
+  `/api/embed` + OpenAI-compat `/v1/embeddings` — stesso seam a provider del chat.
+  Nuova opzione **`embedModel`** (es. `nomic-embed-text` 270MB, o `bge-m3` per il
+  multilingue spinto); CLI `--embed-model`, campo UI (advanced).
+- **Backend semantico di `scoreLink`**: task embeddato una volta per scan, link unici
+  embeddati in batch e cachati per scan (pattern `_followCache`); cosine = score.
+  Alimenta frontier, route budget, `minRelevance` e il retrieval del Reshape.
+- **Regola di precisione**: gli embeddings **ordinano sempre, tagliano solo su
+  `minRelevance` opt-in** (i punteggi sono relativi, non assoluti). L'AI-gate resta il
+  giudice in targeted; niente allucinazioni possibili (emettono numeri, non testo).
+- **Fallback**: senza `embedModel` (o modello irraggiungibile → warn una-tantum,
+  pattern `checkModel`) resta il lessicale come pavimento, col SOLO fix minimo
+  Unicode (accenti/cirillico/CJK a bigrammi — serve anche al Reshape).
+- **Vincolo (regola #6): con `noAi` gli embeddings sono SPENTI** — zero chiamate totali.
+
+**Decisione presa (2026-07-02, non rifare):** l'upgrade lessicale sofisticato
+(similarità n-gram, pesi IDF auto-calibranti) è stato valutato e **BOCCIATO** — non
+supera il criterio "miglioramento significativo" (non risolve sinonimi/cross-lingua,
+che è il problema reale); gli embeddings sono l'alternativa migliore. Del lessicale si
+tiene solo il fix Unicode.
+
+**Criterio di accettazione.** Su fixture multilingua (task IT, sito DE/EN): ordering
+corretto (pagine on-task prime) dove il lessicale dà 0 a tutto; `byKind` mostra costo
+embeddings trascurabile rispetto al chat; con `noAi` zero chiamate (test); il retrieval
+del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di default.
+
+**File:** `src/lib/llm.mjs`, `src/lib/relevance.mjs`, `src/lib/retrieve.mjs`,
+`src/engine/crawl-page.mjs`, `bin/cli.mjs`, `ui/index.html`, README.
+
+---
+
 ## Riferimenti (ricerca)
 
 - Crawl4AI — Adaptive Crawling: https://docs.crawl4ai.com/core/adaptive-crawling/
@@ -1073,7 +1281,9 @@ Playwright (se si sceglie (a)); `npm publish --dry-run` pulito.
 
 ---
 
-_Ultimo aggiornamento: 2026-07-02 (revisione ingegneristica: verbale correzioni +
-item #13–#18). sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) —
-vedi "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna
-le decisioni prese sotto ogni item._
+_Ultimo aggiornamento: 2026-07-02 (sessione architetturale: regola #6 "il testo libero
+non pilota il motore", modalità no-AI #19 fatta, item #20–#22 + ordine aggiornato;
+in precedenza: revisione ingegneristica con verbale correzioni + item #13–#18).
+sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) — vedi
+"Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna le
+decisioni prese sotto ogni item._
