@@ -36,6 +36,17 @@ export interface CrawlOptions {
   /** `"ollama"` (local, default) or `"openai"` (any OpenAI-compatible API). */
   provider?: Provider;
   /**
+   * Optional embedding model id (#22), from the same provider as `model` (e.g.
+   * `"nomic-embed-text"` on Ollama, `"text-embedding-3-small"` on OpenAI). Makes
+   * task→link relevance SEMANTIC — multilingual and synonym-aware — feeding the
+   * best-first frontier ordering, the route budget, the opt-in `minRelevance`
+   * pruning and the reshape context retrieval. Embeddings only ORDER; they never
+   * drop links by themselves. Unset (default) = the lexical scorer; unreachable
+   * backend = one loud warning, then the lexical floor. Ignored with `noAi`
+   * (zero calls to ANY model, embeddings included).
+   */
+  embedModel?: string;
+  /**
    * Crawl with ZERO model calls (no model needed): reveal runs on DOM heuristics,
    * pages are kept whole, every in-scope link is followed. Zero tokens; the output
    * is not task-filtered and big sites can take longer — contain with `maxPages` /
@@ -177,8 +188,8 @@ export interface OutputFile {
 }
 
 /** AI token usage counters. `byKind` splits the same totals by call type
- *  (`"reveal"`, `"scope"`, `"links"`, `"nav-plan"`, `"health"`, …) so cost can be
- *  attributed to the judgment that spent it. `cachedInputTokens` is the slice of
+ *  (`"reveal"`, `"scope"`, `"links"`, `"nav-plan"`, `"embed"`, `"health"`, …) so cost
+ *  can be attributed to the judgment that spent it. `cachedInputTokens` is the slice of
  *  `inputTokens` a remote provider served from its prompt cache (~10× cheaper);
  *  `0` for providers that don't report it (e.g. local Ollama). */
 export interface TokenUsage {

@@ -27,18 +27,49 @@ const STOP = new Set([
   // request-framing verbs (asking, not topic)
   'extract', 'estrai', 'estrarre', 'get', 'find', 'fetch', 'scrape', 'use', 'usare',
   'using', 'give', 'list', 'crawl', 'collect', 'gather', 'complete', 'completa',
-  'completo', 'completi', 'full', 'whole', 'entire', 'tutto', 'tutta',
+  'completo', 'completi', 'full', 'whole', 'entire', 'everything', 'tutto', 'tutta',
   // url / locale noise
   'www', 'http', 'https', 'com', 'org', 'net', 'html', 'htm', 'php', 'aspx', 'index',
   'en', 'us',
 ]);
 
+// CJK scripts (Han + kana + Hangul) carry no word boundaries, so word-splitting
+// alone yields one giant unusable token — those runs are emitted as character
+// BIGRAMS instead, the standard boundary-free trick, so two texts about the same
+// thing share tokens ("提取价格" and "价格表" meet on 价格).
+const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_SPLIT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+
 /** Split arbitrary text into lowercased word tokens (camelCase-aware), minus stopwords,
- *  pure numbers and 1-char fragments. Pure/deterministic. */
+ *  pure numbers and 1-char fragments. Pure/deterministic.
+ *
+ *  #22 (the one lexical upgrade kept — the n-gram/IDF rework was evaluated and
+ *  REJECTED): Unicode-aware instead of ASCII-only. Accented words survive with
+ *  their diacritics FOLDED (NFKD, combining marks stripped) so "menù"/"menu" and
+ *  "documentación"/"documenta…" connect; Cyrillic/Greek tokenize as words; CJK
+ *  runs become character bigrams. The old ASCII splitter silently DESTROYED all
+ *  of these ("perché" → "perch", Cyrillic → nothing). Cross-language synonyms
+ *  remain the semantic tier's job (lib/semantic.mjs) — this only stops the
+ *  tokenizer from eating non-English text. */
 export function tokenize(text) {
   const out = [];
-  const raw = String(text || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-  for (const tok of raw.toLowerCase().split(/[^a-z0-9]+/)) {
+  const raw = String(text || '')
+    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2') // camelCase → camel Case
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, ''); // fold diacritics; leaves Cyrillic/Greek/CJK intact
+  for (const tok of raw.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (!tok) continue;
+    if (CJK_RE.test(tok)) {
+      for (const run of tok.match(CJK_SPLIT_RE) || []) {
+        if (CJK_RE.test(run)) {
+          if (run.length === 1) out.push(run);
+          else for (let i = 0; i < run.length - 1; i++) out.push(run.slice(i, i + 2));
+        } else if (run.length >= 2 && !/^\d+$/.test(run) && !STOP.has(run)) {
+          out.push(run);
+        }
+      }
+      continue;
+    }
     if (tok.length < 2) continue;
     if (/^\d+$/.test(tok)) continue; // version/page numbers are noise here
     if (STOP.has(tok)) continue;

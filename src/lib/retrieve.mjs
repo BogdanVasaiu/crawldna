@@ -63,6 +63,11 @@ function scoreSection(section, terms, headTokens) {
  * @param {Array<{filename?:string, bytes?:number, content:string}>} documents
  * @param {string} instruction  the user's request (the query)
  * @param {number} budget       character budget for the combined content
+ * @param {(di:number, si:number, section:{heading:string,text:string}) => number} [sectionScore]
+ *        #22 — optional external scorer (the semantic tier: cosine 0..1 per
+ *        section). When given, it REPLACES the lexical term scoring — so a
+ *        cross-language request still ranks the right sections — while the
+ *        explicit document-reference boost and the packing stay identical.
  * @returns {{
  *   docs: Array<object>,   the documents to show (content possibly a verbatim subset;
  *                          `partial: true` marks a doc whose sections were omitted)
@@ -75,7 +80,7 @@ function scoreSection(section, terms, headTokens) {
  * (or an explicit document reference by filename/byte size) selected the sections.
  * 'head' = nothing to discriminate by — the caller keeps the legacy head-slice.
  */
-export function selectRelevant(documents, instruction, budget) {
+export function selectRelevant(documents, instruction, budget, sectionScore = null) {
   const docs = (documents || []).map((d) => ({ ...d }));
   const total = docs.reduce((n, d) => n + String(d.content || '').length, 0);
   if (total <= budget) return { docs, truncated: false, mode: 'full', omittedDocs: 0 };
@@ -90,18 +95,28 @@ export function selectRelevant(documents, instruction, budget) {
     else if (d.bytes && instrLC.includes(String(d.bytes))) referenced.add(i);
   });
 
-  if (!terms.length && referenced.size === 0) {
+  // A semantic scorer can discriminate even when no lexical term overlaps
+  // (cross-language requests) — only bail to the head-slice when NOTHING can.
+  if (!terms.length && referenced.size === 0 && !sectionScore) {
     return { docs, truncated: true, mode: 'head', omittedDocs: 0 };
   }
 
-  // Score every section of every document against the instruction.
+  // Score every section of every document against the instruction. The semantic
+  // score (cosine 0..1) is scaled ×10 so its ordering is meaningful next to the
+  // ×100 referenced-document boost, which must keep packing first.
   const pool = [];
   const perDocCount = new Array(docs.length).fill(0);
   docs.forEach((d, di) => {
     for (const [si, s] of sectionizeDoc(d.content).entries()) {
       perDocCount[di]++;
       const base = referenced.has(di) ? 100 : 0; // a named doc packs first, in order
-      const score = base + (terms.length ? scoreSection(s, terms, tokenize(s.heading)) : 0);
+      const score =
+        base +
+        (sectionScore
+          ? Math.max(0, Number(sectionScore(di, si, s)) || 0) * 10
+          : terms.length
+            ? scoreSection(s, terms, tokenize(s.heading))
+            : 0);
       pool.push({ di, si, score, text: s.text });
     }
   });

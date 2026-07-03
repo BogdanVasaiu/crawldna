@@ -26,6 +26,14 @@ export const DEFAULT_OPTIONS = {
   // no model that is universally present, so pretending one exists only produces a
   // silent failure. Pick one explicitly (see `provider`).
   provider: 'ollama', // 'ollama' (local) | 'openai' (any OpenAI-compatible API: URL + key)
+  embedModel: undefined, // #22 — OPTIONAL embedding model id (e.g. 'nomic-embed-text' on
+  // Ollama, 'text-embedding-3-small' on OpenAI; same provider/baseUrl as `model`).
+  // When set, task→link relevance becomes SEMANTIC (multilingual, synonym-aware):
+  // it feeds the best-first frontier ordering, the route budget (#16), the opt-in
+  // minRelevance pruning and the reshape retrieval. Embeddings ORDER, they never
+  // drop anything by themselves; unset (default) or unreachable (one loud warning)
+  // → the lexical scorer as the floor. With `noAi` the semantic tier is OFF —
+  // zero calls to ANY model, embeddings included (rule #6).
   noAi: false, // CRAWL WITHOUT AI. The engine keeps its full mechanics — render, reveal
   // (heuristic-triaged clicks), extract, dedup — but makes ZERO model calls: pages are
   // kept whole (no section scoping) and EVERY in-scope link is followed (no link gate).

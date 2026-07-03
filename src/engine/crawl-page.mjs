@@ -13,7 +13,26 @@ import { aiScopeContent, aiSelectLinks } from './decide.mjs';
 import { modeBehavior } from '../lib/task.mjs';
 import { normalizeUrl, inScope, resolveUrl } from '../lib/url.mjs';
 import { taskTerms, scoreLink } from '../lib/relevance.mjs';
+import { createScorer } from '../lib/semantic.mjs';
 import { settle } from '../lib/settle.mjs';
+
+/**
+ * #22 — the per-scan relevance scorer: semantic (embeddings, multilingual) when
+ * the user configured an `embedModel`, the lexical floor otherwise. One instance
+ * per scan (its vector cache and one-time failure warning live there), shared by
+ * the link gate ordering, the minRelevance pruning and the route budget.
+ */
+function scorerFor(ctx, task) {
+  const host = ctx.currentScan || ctx;
+  if (!host._scorer) {
+    host._scorer = createScorer({
+      llm: ctx.options.llm,
+      task,
+      onWarn: (message) => ctx.emit({ type: 'warn', reason: 'embed', message }),
+    });
+  }
+  return host._scorer;
+}
 
 const now = () => new Date().toISOString();
 const bytesOf = (s) => Buffer.byteLength(s || '', 'utf8');
@@ -37,8 +56,9 @@ export async function decideFollow(ctx, task, candidateObjs) {
   // Universal, task-driven relevance score per candidate (URL + label). Used to crawl
   // the most on-task links FIRST, and — only when asked — to prune clearly off-task ones
   // before the model. No per-site/URL-shape rule is involved; the task is the query.
-  const scoreOf = new Map();
-  for (const c of candidateObjs) scoreOf.set(c.href, scoreLink(terms, c).score);
+  // #22: semantic (embeddings) when configured — an Italian task ranks German links —
+  // lexical floor otherwise; either way the same [0,1] scores feed everything below.
+  const scoreOf = await scorerFor(ctx, task).scoreAll(candidateObjs);
 
   // #20 — in 'complete' mode there IS no link gate: the user asked for everything,
   // so keep/drop has no meaning and every batch call would be a token spent to hear
@@ -125,12 +145,21 @@ export async function decideFollow(ctx, task, candidateObjs) {
  * route stays reachable via real links / sitemap on any later page.
  * Pure; exported for the test suite.
  *
+ * #22: an optional `scoreOf` map (href → score, from the per-scan scorer) lets
+ * the semantic tier feed the ranking; any href it misses — and every call
+ * without the map — falls back to the lexical scoreLink, so the guard's
+ * variance semantics are unchanged.
+ *
  * @returns {{ routes: string[], cut: number }}
  */
-export function budgetRoutes(routes, terms, maxRoutes) {
+export function budgetRoutes(routes, terms, maxRoutes, scoreOf = null) {
   const budget = Math.max(0, Math.floor(Number(maxRoutes) || 0));
   if (!budget || routes.length <= budget) return { routes, cut: 0 };
-  const scored = routes.map((href, i) => ({ href, i, score: scoreLink(terms, { href }).score }));
+  const scored = routes.map((href, i) => ({
+    href,
+    i,
+    score: scoreOf && scoreOf.has(href) ? scoreOf.get(href) : scoreLink(terms, { href }).score,
+  }));
   let min = Infinity;
   let max = -Infinity;
   for (const s of scored) {
@@ -277,7 +306,13 @@ export async function crawlPageWithEngine(target, ctx) {
   if (routes.length) {
     const cacheHost = ctx.currentScan || ctx;
     if (!cacheHost._taskTerms) cacheHost._taskTerms = taskTerms(task);
-    const budgeted = budgetRoutes(routes, cacheHost._taskTerms, ctx.options.maxRoutes);
+    // #22: rank the speculative routes with the same per-scan scorer as the link
+    // gate (semantic when configured); the lexical floor keeps the conservative
+    // no-variance-no-cut guard exactly as before. Scored ONLY when the budget
+    // would actually cut — under-budget pages must not pay for embeddings.
+    const overBudget = ctx.options.maxRoutes > 0 && routes.length > ctx.options.maxRoutes;
+    const routeScores = overBudget ? await scorerFor(ctx, task).scoreAll(routes.map((href) => ({ href }))) : null;
+    const budgeted = budgetRoutes(routes, cacheHost._taskTerms, ctx.options.maxRoutes, routeScores);
     if (budgeted.cut > 0) {
       ctx.emit({
         type: 'action',

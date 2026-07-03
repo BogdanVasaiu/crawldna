@@ -66,6 +66,9 @@ function findScan(manifest, scanId) {
  * @param {string} [a.host]     Ollama host override (provider 'ollama')
  * @param {string} [a.baseUrl]  OpenAI-compatible API base URL (provider 'openai')
  * @param {string} [a.apiKey]   API key (provider 'openai')
+ * @param {string} [a.embedModel] #22 — optional embedding model id: upgrades the
+ *                              context retrieval to semantic section ranking
+ *                              (cross-language asks pull the right sections)
  * @param {string} [a.cacheDir] runs-cache override
  * @param {boolean} [a.verify]  #11 fidelity check (default true): value-like atoms of
  *                              every produced file are verified against the FULL crawled
@@ -73,10 +76,10 @@ function findScan(manifest, scanId) {
  *                              banner inside the file instead of served silently.
  * @returns {Promise<{ reply: string, files: Array<{ filename, bytes, at, fidelity? }>, truncated: boolean, contextMode?: string }>}
  */
-export async function reshape({ runId, scanId = '', message, model, provider, host, baseUrl, apiKey, cacheDir, verify = true }) {
+export async function reshape({ runId, scanId = '', message, model, provider, host, baseUrl, apiKey, embedModel, cacheDir, verify = true }) {
   if (!String(message || '').trim()) throw new Error('empty message');
   if (!model) throw new Error('no model selected');
-  const llm = resolveLlm({ provider, model, ollamaHost: host, baseUrl, apiKey });
+  const llm = resolveLlm({ provider, model, embedModel, ollamaHost: host, baseUrl, apiKey });
   const opts = cacheDir ? { cacheDir } : {};
 
   const { manifest } = await getRun(runId, opts);

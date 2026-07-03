@@ -148,11 +148,15 @@ export function llmDisabled(llm) {
  * `noAi: true` wins over everything: it yields the provider-'none' descriptor —
  * the crawl runs on its deterministic fallbacks (heuristic reveal, keep whole,
  * follow all in-scope) and never contacts a model, so no model is required.
+ * Note it also drops `embedModel` (#22): no-AI means zero calls to ANY model,
+ * embeddings included — rule #6 is absolute.
  *
  * @param {object} [options]
  * @param {boolean} [options.noAi]      disable AI entirely (provider 'none')
  * @param {string} [options.provider]   'ollama' (default) | 'openai'
  * @param {string} [options.model]
+ * @param {string} [options.embedModel] embedding model id (#22, optional — enables
+ *                                      the semantic relevance tier)
  * @param {string} [options.baseUrl]    OpenAI-compatible API base URL
  * @param {string} [options.apiKey]
  * @param {string} [options.ollamaHost] Ollama server URL (legacy / ollama provider)
@@ -163,16 +167,17 @@ export function resolveLlm(options = {}) {
     ? String(options.provider).toLowerCase()
     : 'ollama';
   const model = options.model || '';
+  const embedModel = String(options.embedModel || '').trim();
 
   if (provider === 'openai') {
     const apiKey =
       options.apiKey || process.env.SAGECRAWL_API_KEY || process.env.OPENAI_API_KEY || '';
-    return { provider, model, baseUrl: openaiBase(options.baseUrl), apiKey };
+    return { provider, model, embedModel, baseUrl: openaiBase(options.baseUrl), apiKey };
   }
 
   // ollama: the baseUrl is the Ollama host (no /v1).
   const baseUrl = trimUrl(options.ollamaHost || options.baseUrl || DEFAULT_OLLAMA_HOST);
-  return { provider, model, baseUrl, apiKey: '' };
+  return { provider, model, embedModel, baseUrl, apiKey: '' };
 }
 
 // --- Ollama backend (one cached client per host) ---------------------------
@@ -383,6 +388,76 @@ export async function chat(llm, system, user, schema = null, kind = '') {
       }
     }
     return content;
+  });
+}
+
+/**
+ * #22 — embed texts with the configured `embedModel`, through the SAME provider
+ * seam as chat: Ollama `/api/embed` or any OpenAI-compatible `/v1/embeddings`.
+ * Returns one vector per input, in input order. Usage is metered to the sink
+ * under kind 'embed', so a run's report shows exactly what the semantic tier
+ * costs next to the chat calls.
+ *
+ * Contract (rule #6): in no-AI mode this THROWS — embeddings are model calls
+ * like any other, and no-AI means zero calls to ANY model. Callers (the
+ * semantic scorer) check `llm.embedModel` first and fall back to the lexical
+ * floor; this guard is the backstop, not the routine path.
+ *
+ * @param {{provider:string, embedModel?:string, baseUrl:string, apiKey:string}} llm
+ * @param {string[]|string} texts
+ * @returns {Promise<number[][]>}
+ */
+export async function embed(llm, texts) {
+  if (llmDisabled(llm)) throw new Error('AI is disabled for this run (no-AI mode) — no model calls are made, embeddings included');
+  const model = llm && llm.embedModel;
+  if (!model) throw new Error('no embedModel configured');
+  const list = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? ''));
+  if (!list.length) return [];
+  const provider = llm.provider === 'openai' ? 'openai' : 'ollama';
+  return limiterFor(provider).run(async () => {
+    let vectors;
+    let usage;
+    if (provider === 'openai') {
+      if (!llm.baseUrl) throw new Error('no API base URL set');
+      const r = await fetch(joinUrl(llm.baseUrl, 'embeddings'), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(llm.apiKey ? { authorization: 'Bearer ' + llm.apiKey } : {}),
+        },
+        body: JSON.stringify({ model, input: list }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        throw new Error(`embeddings HTTP ${r.status}${body ? ': ' + body.slice(0, 200) : ''}`);
+      }
+      const d = await r.json().catch(() => null);
+      vectors = (Array.isArray(d?.data) ? d.data : [])
+        .slice()
+        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+        .map((e) => e.embedding);
+      usage = { inputTokens: d?.usage?.prompt_tokens ?? estimateTokens(list.join(' ')), outputTokens: 0, cachedInputTokens: 0 };
+    } else {
+      const res = await withTimeout(
+        ollamaClient(llm.baseUrl).embed({ model, input: list }),
+        REQUEST_TIMEOUT_MS,
+        'Ollama embed',
+      );
+      vectors = res?.embeddings || [];
+      usage = { inputTokens: res?.prompt_eval_count ?? estimateTokens(list.join(' ')), outputTokens: 0, cachedInputTokens: 0 };
+    }
+    if (!Array.isArray(vectors) || vectors.length !== list.length || vectors.some((v) => !Array.isArray(v) || !v.length)) {
+      throw new Error(`embedding backend returned ${Array.isArray(vectors) ? vectors.length : 0} vector(s) for ${list.length} input(s)`);
+    }
+    if (typeof llm.__onUsage === 'function') {
+      try {
+        llm.__onUsage({ provider, kind: 'embed', inputTokens: usage.inputTokens || 0, outputTokens: 0, cachedInputTokens: 0 });
+      } catch {
+        /* metering must never break the call */
+      }
+    }
+    return vectors;
   });
 }
 

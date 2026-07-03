@@ -132,7 +132,7 @@ come libreria · sinergia con le componenti esistenti · entrambe le visioni AI/
 | 19 | Modalità no-AI (crawl a zero chiamate modello) | fruibilità + costi | Basso | ✅ fatto (2026-07-02, da committare) |
 | 20 | `mode` esplicito (complete/targeted) — via lo sniffing della task | architettura + costi (−gate/scope in complete) | Medio | ✅ fatto (2026-07-03) |
 | 21 | Reveal a ciclo chiuso (misura, non giudizio) | precisione reveal — la missione | Medio-Alto | ✅ fatto (2026-07-03) |
-| 22 | Tier embeddings (`embedModel`) — ranking semantico multilingua | qualità ranking + Reshape | Medio | ☐ da fare |
+| 22 | Tier embeddings (`embedModel`) — ranking semantico multilingua | qualità ranking + Reshape | Medio | ✅ fatto (2026-07-03) |
 
 **Da fare per primi (qualità del crawl):** #1, #2, #3. *(fatti)*
 **Per dimostrare il valore (misurabile):** #12. *(fatto)*
@@ -1303,7 +1303,55 @@ interazioni di reveal — imparentata con #9.
 ---
 
 ## #22 — Tier embeddings (`embedModel`) — ranking semantico multilingua
-**Effetto:** qualità ranking + Reshape · **Sforzo:** Medio · **Stato:** ☐
+**Effetto:** qualità ranking + Reshape · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-03)
+
+> **Implementato**, tutti e quattro i pezzi della proposta (e l'upgrade lessicale
+> n-gram/IDF NON rifatto, come da decisione — del lessicale solo il fix Unicode):
+> - **`embed(llm, texts)` nel transport** ([llm.mjs](src/lib/llm.mjs)): Ollama
+>   `/api/embed` + OpenAI-compat `/v1/embeddings`, stesso seam provider del chat —
+>   limiter per-provider, timeout, vettori in ordine d'input, metering `byKind.embed`
+>   (input tokens, output 0). `resolveLlm` porta `embedModel` nel descrittore; con
+>   `noAi` il descrittore 'none' NON lo porta e `embed()` rifiuta comunque (doppia
+>   garanzia regola #6: zero chiamate a QUALSIASI modello).
+> - **Scorer semantico per-scan** (nuovo [semantic.mjs](src/lib/semantic.mjs),
+>   `createScorer`): task embeddato una volta, link unici embeddati in batch da 64 e
+>   cachati per scan (testo = label + heading vicino + path decodificato); cosine
+>   clampato [0,1] = score. Regole di precisione nel codice: ORDINA sempre, taglia solo
+>   su `minRelevance` opt-in; task generico (zero topic-term) → tutti 1 e ZERO chiamate;
+>   backend rotto → UN warning (`reason: 'embed'`) e pavimento lessicale, mai silenzio.
+>   Consumatori in [crawl-page.mjs](src/engine/crawl-page.mjs): `decideFollow`
+>   (ordinamento best-first + pruning minRelevance), route budget #16 (`budgetRoutes`
+>   accetta una score-map opzionale; le route si embeddano SOLO quando il budget
+>   taglierebbe davvero).
+> - **Retrieval Reshape semantico**: `selectRelevant` ([retrieve.mjs](src/lib/retrieve.mjs))
+>   accetta un `sectionScore` esterno (sostituisce il punteggio lessicale, boost
+>   documento-nominato e packing invariati; niente più fallback 'head' quando il
+>   semantico discrimina); `semanticSectionScores` embedda ogni sezione per GIST
+>   (heading + primi 300 char — costo limitato) e `aiReshape` lo usa solo quando le
+>   fonti sforano il budget. Richiesta cross-lingua → sezioni giuste.
+> - **Fix Unicode del lessicale** ([relevance.mjs](src/lib/relevance.mjs) `tokenize`):
+>   split Unicode-aware + diacritici FOLDED via NFKD ("menù"↔"menu",
+>   "documentación"↔"documenta…"), cirillico/greco come parole, run CJK a bigrammi
+>   (提取价格 ↔ 价格表 si incontrano su 价格) — l'ASCII-only li DISTRUGGEVA. Vale anche
+>   per il retrieval del Reshape (tokenize/termHit condivisi). ASCII invariato
+>   (suite pre-esistente verde). Aggiunto 'everything' alle stopword request-framing.
+> - **Superficie**: opzione piana `embedModel` (default undefined = lessicale), CLI
+>   `--embed-model` (crawl E reshape), UI campo "Embedding model (optional)" in
+>   Advanced (persistito, non inviato se vuoto), tipi (`CrawlOptions.embedModel`,
+>   byKind 'embed'), README (tabella + nota).
+>
+> **Verificato** ([test/embed.test.mjs](test/embed.test.mjs), 15 test, 166 totali,
+> offline — stub OpenAI-compat che mappa keyword→vettori): fixture d'accettazione
+> task-IT/sito-DE (lessicale 0 a tutto, semantico ordina Preise>Kontakt); cache
+> per-scan (zero embed ripetuti); task generico zero chiamate; noAi zero chiamate;
+> failure → un warning e pavimento lessicale; decideFollow pruning semantico
+> PRIMA del gate e nessun drop di default (solo ordering); budgetRoutes con
+> score-map + guardia no-varianza intatta; retrieval cross-lingua ('dammi i
+> prezzi' → sezione Pricing EN, 'head'→'retrieval'); metering byKind.embed;
+> tokenize su 4 script. UI provata dal vivo (campo, persistenza, console pulita).
+> ⏳ **Dal vivo:** `ollama pull nomic-embed-text` e un crawl reference con
+> `--embed-model` — confermare ordering migliore su sito multilingua reale e costo
+> `byKind.embed` trascurabile rispetto al chat (harness #12).
 
 **Problema oggi.** Tutto il ranking task→link è lessicale ([src/lib/relevance.mjs](src/lib/relevance.mjs)):
 cieco tra lingue (task "estrai i prezzi" su sito tedesco: "Preise" score 0) e sui
@@ -1370,10 +1418,11 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
-_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito e #21 reveal a ciclo chiuso
-FATTI — la task non pilota più il motore, il reveal esce su una MISURA e il residuo
-nascosto è un numero per-pagina; trovato e corretto anche il bug `direction:null→0`
-di aiPlanNavigation. Prossimi in ordine: #22 embeddings → #14 politeness.
+_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito, #21 reveal a ciclo chiuso e
+#22 tier embeddings FATTI — la task non pilota più il motore, il reveal esce su una
+MISURA, e il ranking task→link è semantico/multilingua quando l'utente configura un
+`embedModel` (con noAi resta a zero chiamate); trovato e corretto anche il bug
+`direction:null→0` di aiPlanNavigation. Prossimo: #14 politeness + anti-bot.
 In precedenza: 2026-07-02 sessione architetturale — regola #6, no-AI #19 — e
 revisione ingegneristica #13–#18).
 sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) — vedi

@@ -26,7 +26,8 @@
 // (the fallbacks are shared), but intentional, warned once, and free of the
 // failed calls' latency. Zero tokens by construction.
 import { chat, llmDisabled } from '../lib/llm.mjs';
-import { selectRelevant } from '../lib/retrieve.mjs';
+import { selectRelevant, sectionizeDoc } from '../lib/retrieve.mjs';
+import { semanticSectionScores } from '../lib/semantic.mjs';
 
 /** Pull the first JSON value out of a model reply. */
 function parseJson(text) {
@@ -213,7 +214,18 @@ export async function aiReshape({ llm, instruction, history = [], documents = nu
   // own memory (a fabricated v-alert props table, live). Verbatim subsets, document
   // order preserved, omissions marked; 'head' mode = the legacy slice, kept only when
   // nothing in the instruction discriminates (e.g. "tidy everything up").
-  const sel = selectRelevant(docs, instruction, RESHAPE_CAP);
+  // #22: with an embedModel configured, sections are ranked SEMANTICALLY (each by its
+  // heading + head window) so a cross-language request still pulls the right ones;
+  // null (tier off / backend down) keeps the lexical retrieval byte-identical. Only
+  // computed when the sources actually exceed the budget — a fitting corpus embeds nothing.
+  let sectionScore = null;
+  if (llm && llm.embedModel && !llmDisabled(llm)) {
+    const total = docs.reduce((n, d) => n + String(d.content || '').length, 0);
+    if (total > RESHAPE_CAP) {
+      sectionScore = await semanticSectionScores({ llm, instruction, docSections: docs.map((d) => sectionizeDoc(d.content)) });
+    }
+  }
+  const sel = selectRelevant(docs, instruction, RESHAPE_CAP, sectionScore);
   let contextMode = sel.mode;
   let truncated = sel.truncated;
   let sourcesBlock = renderDocs(sel.docs, 'SOURCE DOCUMENT');

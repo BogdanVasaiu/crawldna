@@ -667,6 +667,7 @@
             <div><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
             <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
             <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
+            <div><label>Embedding model (optional)</label><input id="embedModel" placeholder="e.g. nomic-embed-text" /></div>
           </div>
           <dl style="margin-top:16px">
             <dt>Browser</dt>
@@ -686,6 +687,14 @@
             <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
             <dt>Exclude</dt>
             <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
+            <dt>Embedding model</dt>
+            <dd>Optional, from the same provider as the main model (e.g.
+              <code>nomic-embed-text</code> on Ollama — <code>ollama pull nomic-embed-text</code> —
+              or <code>text-embedding-3-small</code> on OpenAI). Makes the task→link relevance
+              <b>semantic</b>: a task in one language ranks pages in another, and synonyms count.
+              It only <b>orders</b> (and feeds “Focus on task” if you raise it) — it never drops
+              a page by itself. Leave empty for the plain word-matching scorer.
+              Ignored when “Crawl without AI” is on.</dd>
           </dl>
           <p class="og-foot">
             <b>Regex examples:</b> Include <code>/docs/</code> stays in that section ·
@@ -989,6 +998,11 @@ function collectOptions() {
   if ($('exclude').value.trim()) o.exclude = $('exclude').value.trim();
   const mr = Number($('minRelevance').value) || 0;
   if (mr > 0) o.minRelevance = mr;
+  // #22 — optional semantic relevance tier. The core ignores it under noAi
+  // (provider 'none' carries no embedModel — zero model calls of any kind).
+  const em = $('embedModel').value.trim();
+  if (em) o.embedModel = em;
+  try { localStorage.setItem('sagecrawl.embedModel', em); } catch {}
   return o;
 }
 
@@ -2129,6 +2143,8 @@ try {
   const savedApiModel = localStorage.getItem('sagecrawl.model.openai');
   if (savedApiModel) $('apiModel').value = savedApiModel;
   selectedModel = localStorage.getItem('sagecrawl.model') || '';
+  const savedEmbed = localStorage.getItem('sagecrawl.embedModel');
+  if (savedEmbed) $('embedModel').value = savedEmbed;
   // Mode first, then no-AI: applyNoAi forces 'complete' if a saved 'targeted'
   // clashes with a saved no-AI (targeted needs AI).
   const savedMode = localStorage.getItem('sagecrawl.mode');

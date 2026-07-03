@@ -85,6 +85,13 @@ Options:
   --max-routes <n>       cap the JS-mined route candidates sent to the AI link gate,
                          top-ranked by task relevance (default: ${DEFAULT_OPTIONS.maxRoutes}; 0 = unlimited;
                          only cuts when the task discriminates — DOM links are never capped)
+  --embed-model <name>   OPTIONAL embedding model (e.g. nomic-embed-text on Ollama,
+                         text-embedding-3-small on an API; same provider as --model).
+                         Makes task→link relevance SEMANTIC — multilingual, synonym-
+                         aware — for frontier ordering, --max-routes and
+                         --min-relevance, and for reshape's context retrieval.
+                         Orders only, never drops by itself; unset = lexical scoring.
+                         Ignored with --no-ai (zero model calls of any kind)
   --ollama-host <url>    Ollama server URL (default: http://127.0.0.1:11434)
   --cache-dir <dir>      override the runs-cache location
   --per-document         also emit one identifiable .md per page + index.md + a JSONL
@@ -138,6 +145,7 @@ const OPTION_CONFIG = {
   exclude: { type: 'string' },
   'min-relevance': { type: 'string' },
   'max-routes': { type: 'string' },
+  'embed-model': { type: 'string' },
   'ollama-host': { type: 'string' },
   'cache-dir': { type: 'string' },
   'per-document': { type: 'boolean' },
@@ -194,6 +202,7 @@ function optionsFromFlags(values) {
   if (values.exclude) o.exclude = values.exclude;
   if (values['min-relevance'] != null) o.minRelevance = Number(values['min-relevance']);
   if (values['max-routes'] != null) o.maxRoutes = Number(values['max-routes']);
+  if (values['embed-model']) o.embedModel = values['embed-model'];
   if (values['ollama-host']) o.ollamaHost = values['ollama-host'];
   if (values['cache-dir']) o.cacheDir = values['cache-dir'];
   if (values['per-document']) o.perDocument = true;
@@ -384,6 +393,7 @@ async function reshapeCommand(args, values) {
       host: values['ollama-host'],
       baseUrl: values['base-url'],
       apiKey: values['api-key'],
+      embedModel: values['embed-model'],
       cacheDir: values['cache-dir'],
       verify: !values['no-verify'],
     });
