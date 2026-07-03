@@ -16,6 +16,8 @@ import { saveRun, scanIdFor, initRun, appendJournal, loadRunForResume, cacheRoot
 import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf, siblingKey } from './lib/url.mjs';
 import { modeBehavior, MODES } from './lib/task.mjs';
+import { createHostGate, parseRobots, isAllowed } from './lib/robots.mjs';
+import { fetchText } from './lib/fetcher.mjs';
 import { resolveLlm, checkModel, abortPendingLlm, llmDisabled } from './lib/llm.mjs';
 import { simhash, hamming } from './lib/simhash.mjs';
 
@@ -65,6 +67,13 @@ export const DEFAULT_OPTIONS = {
   // many tabs) need the headroom. Disabled controls are skipped so it isn't wasted.
   include: undefined,
   exclude: undefined,
+  delay: 0, // #14 — POLITENESS, opt-in: minimum milliseconds between requests to the
+  // SAME host (frontier page loads). 0 (default) = off, today's behaviour. Concurrent
+  // workers queue behind each other on one host but never across hosts.
+  respectRobots: false, // #14 — POLITENESS, opt-in: read each origin's robots.txt and
+  // SKIP disallowed URLs — each skip is a loud `robots` warning, never silent (the
+  // warning is the contract). Also honours Crawl-delay (combined with `delay`, the
+  // larger wins). Off (default) = the tool stays user-directed, like wget.
   maxRoutes: 200, // #16 — cap on the SPECULATIVE JS-mined routes (perceive digs up to
   // 800 same-site paths per page out of script/JSON blobs) that reach the AI link
   // gate, ranked by task relevance first. 0 = unlimited. Conservative: the cut only
@@ -199,6 +208,7 @@ export function crawlDocs(targets, options = {}) {
     );
   }
   opts.concurrency = Math.max(1, Number(opts.concurrency) || 1);
+  opts.delay = Math.max(0, Number(opts.delay) || 0);
   opts.maxPages = Math.max(0, Number(opts.maxPages) || 0);
   opts.maxActions = Math.max(1, Number(opts.maxActions) || 1);
   opts.minRelevance = Math.min(1, Math.max(0, Number(opts.minRelevance) || 0));
@@ -709,6 +719,23 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
     return true;
   };
 
+  // #14 — politeness (opt-in, off by default = today's behaviour). One shared
+  // state per RUN so two scans on the same host still space out: a per-host
+  // pacer and a robots.txt cache (fetched once per origin, parsed offline).
+  const politeness = ctx._politeness || (ctx._politeness = { gate: createHostGate(), robots: new Map() });
+  const robotsFor = (u) => {
+    const origin = originOf(u);
+    if (!origin) return Promise.resolve({ rules: [], crawlDelay: null });
+    let p = politeness.robots.get(origin);
+    if (!p) {
+      p = fetchText(origin + '/robots.txt', { timeout: 15000, accept: 'text/plain, */*' })
+        .then((r) => (r.ok ? parseRobots(r.text) : { rules: [], crawlDelay: null }))
+        .catch(() => ({ rules: [], crawlDelay: null }));
+      politeness.robots.set(origin, p);
+    }
+    return p;
+  };
+
   // Resume (#13): pages restored from the journal are pre-visited (never re-rendered)
   // and their recorded links re-seed the frontier below, so the crawl picks up exactly
   // where it left off — anything not yet kept is reached again through those links.
@@ -756,6 +783,33 @@ async function runGeneralCrawl(target, ctx, opts = {}) {
   const concurrency = Math.max(1, Number(ctx.options.concurrency) || 1);
 
   async function processOne(url) {
+    // #14 — robots (opt-in): a disallowed URL is skipped LOUDLY. The warning is
+    // the contract — the user chose --respect-robots and gets told what it cost.
+    if (ctx.options.respectRobots) {
+      const rob = await robotsFor(url);
+      let path = '/';
+      try {
+        const u = new URL(url);
+        path = u.pathname + u.search;
+      } catch {
+        /* unparsable → treated as allowed */
+      }
+      if (!isAllowed(rob.rules, path)) {
+        ctx.emit({ type: 'warn', url, reason: 'robots', message: 'Skipped: robots.txt disallows this URL (--respect-robots is on).' });
+        return;
+      }
+    }
+    // #14 — per-host pacing (opt-in): the user's delay and robots' Crawl-delay,
+    // the larger wins. Different hosts never wait on each other.
+    let delayMs = ctx.options.delay || 0;
+    if (ctx.options.respectRobots) {
+      const rob = await robotsFor(url); // cached — the second await is free
+      if (rob.crawlDelay) delayMs = Math.max(delayMs, rob.crawlDelay * 1000);
+    }
+    if (delayMs > 0) {
+      await politeness.gate.wait(url, delayMs);
+      if (ctx.shouldStop()) return; // a polite wait must not outlive a Stop
+    }
     if (!discoveryOnly.has(url)) ctx.emit({ type: 'page', url, status: 0 });
     let outcome;
     try {

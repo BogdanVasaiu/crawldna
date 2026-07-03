@@ -14,6 +14,7 @@ import { modeBehavior } from '../lib/task.mjs';
 import { normalizeUrl, inScope, resolveUrl } from '../lib/url.mjs';
 import { taskTerms, scoreLink } from '../lib/relevance.mjs';
 import { createScorer } from '../lib/semantic.mjs';
+import { detectChallenge, challengeBackoffMs } from '../lib/challenge.mjs';
 import { settle } from '../lib/settle.mjs';
 
 /**
@@ -233,11 +234,13 @@ export async function crawlPageWithEngine(target, ctx) {
 
   let revealed;
   let status = 0;
+  let headers = {};
   let navFailed = false; // navigation itself failed (timeout / network) — retryable
   try {
     try {
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
       status = resp ? resp.status() : 0;
+      if (resp) headers = resp.headers();
     } catch {
       navFailed = true; // fall through to whatever rendered
     }
@@ -267,6 +270,45 @@ export async function crawlPageWithEngine(target, ctx) {
         reason: 'http-' + status,
         message: `Page returned HTTP ${status}; it may not exist or have moved. Trying to recover via site navigation.`,
       });
+    }
+    // #14 — anti-bot guard, ALWAYS on (a precision guard, not a courtesy): a
+    // bot-defense challenge ("checking your browser", CAPTCHA wall — often HTTP
+    // 200) must NEVER enter the output as content. Policy: loud `anti-bot`
+    // warning, ONE retry after a backoff (honouring Retry-After), then a
+    // declared skip. Never bypassed — challenges stay out of scope forever
+    // (ARCHITECTURE §14): we signal, we don't break through.
+    const probeChallenge = async () => {
+      const html = await page.content().catch(() => '');
+      const text = await page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '');
+      return detectChallenge({ status, headers, html, contentLen: text.replace(/\s+/g, ' ').trim().length });
+    };
+    let det = await probeChallenge();
+    if (det.challenge) {
+      ctx.emit({
+        type: 'warn',
+        url,
+        reason: 'anti-bot',
+        message: `Bot-defense challenge detected (${det.signal}); retrying once after a pause.`,
+      });
+      await new Promise((r) => setTimeout(r, challengeBackoffMs(headers)));
+      try {
+        const resp2 = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        status = resp2 ? resp2.status() : status;
+        headers = resp2 ? resp2.headers() : {};
+      } catch {
+        /* keep whatever loaded — the re-probe decides */
+      }
+      await settle(page, { maxMs: 8000 });
+      det = await probeChallenge();
+      if (det.challenge) {
+        ctx.emit({
+          type: 'warn',
+          url,
+          reason: 'anti-bot',
+          message: `Still challenged after the retry (${det.signal}) — page skipped; its interstitial is NOT in the output.`,
+        });
+        return { page: null, links: [] }; // never kept, never bypassed
+      }
     }
     revealed = await revealAll(page, ctx, url, task);
   } catch (err) {
@@ -394,11 +436,37 @@ export async function crawlPageWithEngine(target, ctx) {
 /** No-browser path: plain fetch + static extraction (degraded; emits no reveal). */
 async function staticFallback(target, ctx) {
   const { url, task } = target;
-  const res = await loadHtml(url, { browserMode: ctx.options.browser, ctx });
+  let res = await loadHtml(url, { browserMode: ctx.options.browser, ctx });
   // status 0 = the fetch itself failed (network/timeout) — retryable, not "empty page".
   if (!res.html) return { page: null, links: [], failed: !res.status };
 
-  const { title, markdown } = extractMarkdown(res.html, { baseUrl: res.finalUrl });
+  let { title, markdown } = extractMarkdown(res.html, { baseUrl: res.finalUrl });
+
+  // #14 — the same always-on anti-bot guard as the engine path: warn, one
+  // backoff retry, then a declared skip. A challenge is never content.
+  let det = detectChallenge({ status: res.status, headers: res.headers || {}, html: res.html, contentLen: contentWordLen(markdown) });
+  if (det.challenge) {
+    ctx.emit({
+      type: 'warn',
+      url,
+      reason: 'anti-bot',
+      message: `Bot-defense challenge detected (${det.signal}); retrying once after a pause.`,
+    });
+    await new Promise((r) => setTimeout(r, challengeBackoffMs(res.headers || {})));
+    res = await loadHtml(url, { browserMode: ctx.options.browser, ctx });
+    if (!res.html) return { page: null, links: [], failed: !res.status };
+    ({ title, markdown } = extractMarkdown(res.html, { baseUrl: res.finalUrl }));
+    det = detectChallenge({ status: res.status, headers: res.headers || {}, html: res.html, contentLen: contentWordLen(markdown) });
+    if (det.challenge) {
+      ctx.emit({
+        type: 'warn',
+        url,
+        reason: 'anti-bot',
+        message: `Still challenged after the retry (${det.signal}) — page skipped; its interstitial is NOT in the output.`,
+      });
+      return { page: null, links: [] }; // never kept, never bypassed
+    }
+  }
   const links = new Set();
   for (const m of res.html.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
     const abs = resolveUrl(m[1], res.finalUrl);

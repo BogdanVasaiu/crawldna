@@ -230,6 +230,8 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `maxRoutes` | `200` | cap on speculative JS-mined route candidates sent to the AI link gate, top-ranked by task relevance (`0` = unlimited; only cuts when the scores discriminate; real DOM links are never capped) |
 | `include` | — | only crawl URLs matching (string regex or `RegExp`) |
 | `exclude` | — | skip URLs matching |
+| `delay` | `0` | politeness (opt-in): minimum ms between requests to the **same host** — parallel workers queue behind each other per host. `0` = off |
+| `respectRobots` | `false` | politeness (opt-in): read `robots.txt` — disallowed URLs are **skipped with a warning** (never silently), `Crawl-delay` honoured (the larger of it and `delay` wins). Separate from this, the **anti-bot challenge guard is always on**: a bot-defense interstitial (Cloudflare "checking your browser", CAPTCHA walls — often served with HTTP 200) is never kept as content — loud `anti-bot` warning, one retry with backoff, then a declared skip. Never bypassed |
 | `save` | `false` | persist the run to the cache. **Library default: off** (result returned in memory). The CLI/UI turn it on |
 | `cacheDir` | — | where to save when saving is on (default `<cwd>/.sagecrawl/runs`); setting it also turns saving on |
 | `perDocument` | `false` | also package one identifiable `.md` per page (+ `index.md` + `documents.jsonl`) for programmatic use, alongside the consolidated `.md`. Verbatim — see [Output](#output) |

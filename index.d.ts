@@ -76,6 +76,21 @@ export interface CrawlOptions {
   /** Skip URLs matching this pattern. */
   exclude?: string | RegExp;
   /**
+   * Politeness, opt-in (#14): minimum milliseconds between requests to the SAME
+   * host (concurrent workers queue behind each other per host, never across
+   * hosts). `0` (default) = off.
+   */
+  delay?: number;
+  /**
+   * Politeness, opt-in (#14): read each origin's robots.txt — disallowed URLs
+   * are SKIPPED with a `robots` warning (never silently) and `Crawl-delay` is
+   * honoured (the larger of it and `delay` wins). Default `false`: the tool is
+   * user-directed, like wget. Note the anti-bot CHALLENGE guard is separate and
+   * always on: a bot-defense interstitial is never kept as content (one retry
+   * with backoff, then a declared skip with an `anti-bot` warning).
+   */
+  respectRobots?: boolean;
+  /**
    * Cap on the speculative JS-mined route candidates (paths dug out of script/JSON
    * blobs, up to 800 per page) sent to the AI link gate, top-ranked by task
    * relevance. `0` = unlimited. Default `200`. Conservative: only cuts when the
@@ -289,6 +304,8 @@ export declare const DEFAULT_OPTIONS: Required<
     | 'noAi'
     | 'mode'
     | 'browser'
+    | 'delay'
+    | 'respectRobots'
     | 'concurrency'
     | 'maxPages'
     | 'maxActions'

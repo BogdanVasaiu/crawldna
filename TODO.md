@@ -117,7 +117,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | # | Titolo | Effetto | Sforzo | Stato |
 |---|--------|---------|--------|-------|
 | 13 | Persistenza incrementale + resume del crawl | affidabilità (crash ≠ perdita totale) | Medio-Alto | ✅ fatto (2026-07-02) |
-| 14 | Politeness opt-in (delay/robots) + rilevamento anti-bot/challenge | affidabilità / reputazione | Basso-Medio | ☐ da fare |
+| 14 | Politeness opt-in (delay/robots) + rilevamento anti-bot/challenge | affidabilità / reputazione | Basso-Medio | ✅ fatto (2026-07-03) |
 | 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ✅ fatto (2026-07-02, da verificare dal vivo) |
 | 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ✅ fatto (2026-07-02, da misurare dal vivo) |
 | 17 | CI GitHub Actions (suite offline a ogni push) | qualità continua | Basso | ✅ fatto (2026-07-02) |
@@ -904,7 +904,52 @@ salvataggio è off.
 ---
 
 ## #14 — Politeness opt-in (delay/robots) + rilevamento anti-bot/challenge
-**Effetto:** affidabilità / reputazione · **Sforzo:** Basso-Medio · **Stato:** ☐
+**Effetto:** affidabilità / reputazione · **Sforzo:** Basso-Medio · **Stato:** ✅ FATTO (2026-07-03)
+
+> **Implementato**, entrambe le facce:
+> - **Politeness, opt-in** (default off = comportamento byte-identico a oggi; il tool
+>   resta user-directed come wget). Nuovo [src/lib/robots.mjs](src/lib/robots.mjs):
+>   `createHostGate` (pacer per-host a slot riservati — N worker concorrenti sullo
+>   STESSO host si mettono in coda a distanza ≥ delay, host diversi mai in attesa) +
+>   `parseRobots`/`isAllowed` puri (selezione gruppo UA più specifico, longest-match
+>   alla Google, Allow batte Disallow a parità, wildcard `*` e ancora `$`,
+>   Crawl-delay). Frontiera ([index.mjs](src/index.mjs)): opzioni piane **`delay`**
+>   (ms, 0=off) e **`respectRobots`** (bool); robots.txt fetchato UNA volta per origin
+>   e cachato per run; URL disallowed → **warning `robots` con l'URL, mai in silenzio**
+>   (il warning è il contratto); Crawl-delay combinato col delay utente (vince il
+>   maggiore); l'attesa polite rispetta lo Stop. CLI `--delay`/`--respect-robots`,
+>   UI in Advanced (numero + checkbox, non inviati se a default), tipi e README.
+> - **Rilevamento challenge, SEMPRE attivo** (guardia di precisione). Nuovo
+>   [src/lib/challenge.mjs](src/lib/challenge.mjs): `detectChallenge` legge
+>   l'ARTEFATTO della difesa, non il sito — header vendor (`cf-mitigated: challenge`),
+>   widget/iframe dei ~6 vendor (Cloudflare/turnstile, hCaptcha, reCAPTCHA, DataDome,
+>   PerimeterX, AWS WAF) su pagina povera, frasi interstitial ("checking your
+>   browser", "unusual traffic") SOLO con corroborazione meccanica (status 403/429/503
+>   o meta-refresh) e pagina povera (<800 char di testo vero). Una pagina che PARLA di
+>   captcha (doc con l'URL del widget in un code sample) non scatta: ha massa di testo.
+>   Integrata in ENTRAMBI i path di [crawl-page.mjs](src/engine/crawl-page.mjs)
+>   (engine post-settle pre-reveal, e static fallback): **mai tenuta come contenuto**,
+>   warning `anti-bot` col segnale, UN retry con backoff (`challengeBackoffMs` onora
+>   Retry-After, cap 15s), poi **skip dichiarato** (secondo warning) — link non
+>   raccolti dalla pagina-sfida. **Mai aggirata** (ARCHITECTURE §14: si segnala, non
+>   si buca). `fetchText`/`loadHtml` ([fetcher.mjs](src/lib/fetcher.mjs)) ora espongono
+>   gli header di risposta (chiavi lowercase).
+>
+> **Verificato** ([test/politeness.test.mjs](test/politeness.test.mjs), 10 test, 176
+> totali, offline con sito stub): parseRobots (gruppo specifico batte `*`, UA
+> consecutivi, commenti), isAllowed (longest-match, tie→allow, wildcard/$, Disallow
+> vuoto), hostGate (spaziatura same-host, cross-host immediato); detectChallenge
+> (interstitial 200, turnstile+403, frase+429, header vendor da solo; NEGATIVI: doc
+> sul captcha con testo vero, 404 povero senza marker, frase su pagina ricca);
+> Retry-After onorato/bounded; e2e: robots on → /docs/b warning-non-pagina e off →
+> tenuto (default invariato), delay 150ms con concurrency 2 → richieste same-host
+> distanziate (misurate dal log del server), challenge HTTP-200 → warning ×2 (detect
+> + skip), esattamente 1 retry, MAI nell'output, resto del sito intatto. Fix di
+> contorno: shadowing TDZ del parametro `headers` in fetchText (trovato dai test).
+> ⏳ **Dal vivo:** un sito reale dietro Cloudflare per confermare il segnale
+> `cf-mitigated`/interstitial nel browser vero; un crawl con `--delay` su un sito
+> piccolo per il galateo. _Nota:_ le fetch fuori-frontiera (robots.txt, llms-full,
+> sitemap: 1-2 per origin) non sono paced — irrilevanti per il rate.
 
 **Problema oggi.** Due facce dello stesso rischio "il sito ci scambia per attività
 sospetta". (1) Nessun rate-limit per host e nessuna lettura di robots.txt: concurrency
@@ -1418,13 +1463,15 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
-_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito, #21 reveal a ciclo chiuso e
-#22 tier embeddings FATTI — la task non pilota più il motore, il reveal esce su una
-MISURA, e il ranking task→link è semantico/multilingua quando l'utente configura un
-`embedModel` (con noAi resta a zero chiamate); trovato e corretto anche il bug
-`direction:null→0` di aiPlanNavigation. Prossimo: #14 politeness + anti-bot.
-In precedenza: 2026-07-02 sessione architetturale — regola #6, no-AI #19 — e
-revisione ingegneristica #13–#18).
+_Ultimo aggiornamento: 2026-07-03 — sessione Gruppo D completata: #20 `mode`
+esplicito, #21 reveal a ciclo chiuso, #22 tier embeddings e #14 politeness+anti-bot
+TUTTI FATTI (176 test offline verdi). La task non pilota più il motore, il reveal
+esce su una MISURA, il ranking è semantico/multilingua con `embedModel` (zero
+chiamate con noAi), e una pagina-sfida non finisce mai nell'output. Bug reali
+corretti lungo la strada: `direction:null→0` in aiPlanNavigation, shadowing TDZ in
+fetchText. Item aperti rimasti: #6 crawl incrementale → #18 packaging npm → #9
+accessibility-tree. In precedenza: 2026-07-02 sessione architetturale — regola #6,
+no-AI #19 — e revisione ingegneristica #13–#18.
 sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) — vedi
 "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna le
 decisioni prese sotto ogni item._

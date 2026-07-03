@@ -22,10 +22,16 @@ export async function fetchText(url, { headers, timeout = 30000, accept } = {}) 
       headers: { ...DEFAULT_HEADERS, ...(accept ? { accept } : {}), ...headers },
     });
     const contentType = res.headers.get('content-type') || '';
+    // Plain object, lowercase keys — the challenge guard (#14) reads vendor
+    // headers like cf-mitigated / retry-after from here. (Named resHeaders: the
+    // `headers` PARAMETER above is the request's, and shadowing it here would
+    // TDZ the fetch call.)
+    const resHeaders = {};
+    for (const [k, v] of res.headers) resHeaders[k] = v;
     const text = await res.text();
-    return { ok: res.ok, status: res.status, text, contentType, finalUrl: res.url || url };
+    return { ok: res.ok, status: res.status, text, contentType, finalUrl: res.url || url, headers: resHeaders };
   } catch (err) {
-    return { ok: false, status: 0, text: '', contentType: '', finalUrl: url, error: err };
+    return { ok: false, status: 0, text: '', contentType: '', finalUrl: url, error: err, headers: {} };
   } finally {
     clearTimeout(timer);
   }
@@ -60,10 +66,10 @@ export async function loadHtml(url, { browserMode = 'auto', ctx } = {}) {
   if (browserMode !== 'always') {
     staticRes = await fetchText(url);
     if (browserMode === 'never') {
-      return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false };
+      return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false, headers: staticRes.headers };
     }
     if (staticRes.ok && looksRendered(staticRes.text)) {
-      return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false };
+      return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false, headers: staticRes.headers };
     }
   }
 
@@ -75,24 +81,26 @@ export async function loadHtml(url, { browserMode = 'auto', ctx } = {}) {
       release = p.release;
       const { page } = p;
       let status = 200;
+      let headers = {};
       try {
         // domcontentloaded + response-quiet (#15), NOT waitUntil:'networkidle':
         // a site holding a websocket/long-poll open never reaches idle, which
         // made this goto burn its FULL 45s timeout before falling through.
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
         status = resp ? resp.status() : 200;
+        if (resp) headers = resp.headers();
         await settle(page, { maxMs: 8000 });
       } catch {
         // fall back to whatever rendered before the timeout
       }
       const html = await page.content();
       const finalUrl = page.url();
-      return { html, finalUrl, status, rendered: true };
+      return { html, finalUrl, status, rendered: true, headers };
     } catch (err) {
       if (staticRes) {
-        return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false, error: err };
+        return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false, error: err, headers: staticRes.headers };
       }
-      return { html: '', finalUrl: url, status: 0, rendered: false, error: err };
+      return { html: '', finalUrl: url, status: 0, rendered: false, error: err, headers: {} };
     } finally {
       if (release) await release(); // return the context to the pool (reuse its asset cache)
     }
@@ -110,8 +118,8 @@ export async function loadHtml(url, { browserMode = 'auto', ctx } = {}) {
     });
   }
   if (staticRes) {
-    return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false };
+    return { html: staticRes.text, finalUrl: staticRes.finalUrl, status: staticRes.status, rendered: false, headers: staticRes.headers };
   }
   const res = await fetchText(url);
-  return { html: res.text, finalUrl: res.finalUrl, status: res.status, rendered: false };
+  return { html: res.text, finalUrl: res.finalUrl, status: res.status, rendered: false, headers: res.headers };
 }

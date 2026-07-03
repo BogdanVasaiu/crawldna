@@ -668,6 +668,11 @@
             <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
             <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
             <div><label>Embedding model (optional)</label><input id="embedModel" placeholder="e.g. nomic-embed-text" /></div>
+            <div><label>Delay per host, ms (0=off)</label><input id="delay" type="number" value="0" min="0" step="50" /></div>
+            <div class="chk" style="align-self:end; margin:0 0 10px">
+              <input type="checkbox" id="respectRobots" />
+              <label for="respectRobots">Respect robots.txt</label>
+            </div>
           </div>
           <dl style="margin-top:16px">
             <dt>Browser</dt>
@@ -687,6 +692,14 @@
             <dd>Only follow links whose URL <b>matches</b> this regex.</dd>
             <dt>Exclude</dt>
             <dd>Skip links whose URL <b>matches</b> this regex (wins over Include).</dd>
+            <dt>Delay per host</dt>
+            <dd>Politeness: minimum milliseconds between requests to the <b>same host</b>
+              (parallel workers queue behind each other there). <code>0</code> = off.
+              Slower but gentler — useful on small sites or when a site rate-limits.</dd>
+            <dt>Respect robots.txt</dt>
+            <dd>Skips URLs the site's <code>robots.txt</code> disallows — each skip shows up
+              as a warning, never silently — and honours its <code>Crawl-delay</code>.
+              Off by default: like wget, sagecrawl is user-directed.</dd>
             <dt>Embedding model</dt>
             <dd>Optional, from the same provider as the main model (e.g.
               <code>nomic-embed-text</code> on Ollama — <code>ollama pull nomic-embed-text</code> —
@@ -1003,6 +1016,10 @@ function collectOptions() {
   const em = $('embedModel').value.trim();
   if (em) o.embedModel = em;
   try { localStorage.setItem('sagecrawl.embedModel', em); } catch {}
+  // #14 — politeness, opt-in
+  const dly = Number($('delay').value) || 0;
+  if (dly > 0) o.delay = dly;
+  if ($('respectRobots').checked) o.respectRobots = true;
   return o;
 }
 

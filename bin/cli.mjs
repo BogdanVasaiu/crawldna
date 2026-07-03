@@ -81,6 +81,11 @@ Options:
   --max-actions <n>      per-page engine action cap (default: ${DEFAULT_OPTIONS.maxActions})
   --include <regex>      only crawl URLs matching
   --exclude <regex>      skip URLs matching
+  --delay <ms>           politeness (opt-in): minimum gap between requests to the
+                         SAME host (default: ${DEFAULT_OPTIONS.delay} = off)
+  --respect-robots       politeness (opt-in): read robots.txt — disallowed URLs are
+                         SKIPPED with a warning (never silently); Crawl-delay is
+                         honoured (the larger of it and --delay wins)
   --min-relevance <0-1>  focus on task: skip links below this task-relevance (default: ${DEFAULT_OPTIONS.minRelevance} = off)
   --max-routes <n>       cap the JS-mined route candidates sent to the AI link gate,
                          top-ranked by task relevance (default: ${DEFAULT_OPTIONS.maxRoutes}; 0 = unlimited;
@@ -143,6 +148,8 @@ const OPTION_CONFIG = {
   'max-actions': { type: 'string' },
   include: { type: 'string' },
   exclude: { type: 'string' },
+  delay: { type: 'string' },
+  'respect-robots': { type: 'boolean' },
   'min-relevance': { type: 'string' },
   'max-routes': { type: 'string' },
   'embed-model': { type: 'string' },
@@ -200,6 +207,8 @@ function optionsFromFlags(values) {
   if (values['max-actions'] != null) o.maxActions = Number(values['max-actions']);
   if (values.include) o.include = values.include;
   if (values.exclude) o.exclude = values.exclude;
+  if (values.delay != null) o.delay = Number(values.delay);
+  if (values['respect-robots']) o.respectRobots = true;
   if (values['min-relevance'] != null) o.minRelevance = Number(values['min-relevance']);
   if (values['max-routes'] != null) o.maxRoutes = Number(values['max-routes']);
   if (values['embed-model']) o.embedModel = values['embed-model'];
