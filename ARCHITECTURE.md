@@ -61,17 +61,17 @@ rest in extract.md"). For each site it:
 ```mermaid
 flowchart TD
   A[crawlDocs targets, options] --> B{for each scan}
-  B --> D{isDocsTask?}
-  D -- yes --> E[docs profile: llms-full.txt → sitemap → engine]
-  D -- no  --> F[general crawl from entry]
+  B --> D{"mode (#20): complete · targeted · auto(=isDocsTask)"}
+  D -- complete / auto-docs --> E[docs profile: llms-full.txt → sitemap → engine]
+  D -- targeted / auto-other --> F[general crawl from entry]
   E --> G[per-page engine]
   F --> G
 
   subgraph G [per-page engine — crawl-page.mjs]
     G1[render in Playwright] --> G2[revealAll: AI-driven reveal]
     G2 --> G3[extractMarkdown: HTML → clean MD]
-    G3 --> G4[aiScopeContent: keep task-relevant sections — non-docs only]
-    G4 --> G5[aiSelectLinks: which links are real on-task pages]
+    G3 --> G4[aiScopeContent: keep task-relevant sections — skipped in complete mode]
+    G4 --> G5[aiSelectLinks: link gate — skipped in complete mode]
   end
 
   G --> H[ctx.addPage: content-dedup]
@@ -119,10 +119,17 @@ scan it:
 
 1. Emits a `site` event.
 2. **Interprets the task once** → `ctx.directives` (cached per task string). See §7.1.
-3. Chooses a strategy:
-   - `isDocsTask(task)` (matches *documentation / docs / api reference*) →
-     **docs profile** ([`src/profiles/docs.mjs`](src/profiles/docs.mjs)).
-   - otherwise → **general crawl** (`runGeneralCrawl`).
+3. Chooses a strategy from the **explicit `mode` option** (#20 —
+   `modeBehavior` in [`src/lib/task.mjs`](src/lib/task.mjs); free text never
+   flips engine behaviour):
+   - `mode: 'complete'` → **docs profile** ([`src/profiles/docs.mjs`](src/profiles/docs.mjs)),
+     pages kept whole, no AI link-gate/scoping calls (AI still drives reveal +
+     nav-plan). Works with `noAi`.
+   - `mode: 'targeted'` → **general crawl** (`runGeneralCrawl`) with the AI link
+     gate + section scoping. Requires AI (`noAi` is refused loudly).
+   - `mode: 'auto'` (default, legacy) → `isDocsTask(task)` (multilingual
+     *documentation / docs / api reference* stem) picks between the two paths,
+     with the historical gate/scope behaviour. Kept for backward compatibility.
 4. After the frontier drains, **plans the output files** (§8) and **saves the run**.
 
 **`ctx`** is the shared context passed everywhere. It carries `options`, the

@@ -4,6 +4,15 @@
 
 export type Provider = 'ollama' | 'openai';
 export type BrowserMode = 'never' | 'auto' | 'always';
+/**
+ * What to extract — an explicit switch, never inferred from the task wording.
+ * `"complete"`: everything reachable (completeness shortcuts tried first, pages kept
+ * whole, zero AI link-gate/scoping calls). `"targeted"`: only what the task asks
+ * (AI link gate + section scoping — requires AI, incompatible with `noAi`).
+ * `"auto"` (default): legacy behaviour — a multilingual regex on the task picks the
+ * docs path; kept for backward compatibility of existing callers and saved runs.
+ */
+export type CrawlMode = 'auto' | 'complete' | 'targeted';
 
 /** One unit of work: a URL plus the natural-language task describing what to extract. */
 export interface Target {
@@ -26,6 +35,17 @@ export interface CrawlOptions {
   model?: string;
   /** `"ollama"` (local, default) or `"openai"` (any OpenAI-compatible API). */
   provider?: Provider;
+  /**
+   * Crawl with ZERO model calls (no model needed): reveal runs on DOM heuristics,
+   * pages are kept whole, every in-scope link is followed. Zero tokens; the output
+   * is not task-filtered and big sites can take longer — contain with `maxPages` /
+   * `include` / `exclude` / `minRelevance`. Incompatible with `mode: "targeted"`
+   * (task-filtering IS the model's job) — that combination is refused loudly.
+   * Default `false`.
+   */
+  noAi?: boolean;
+  /** What to extract (see {@link CrawlMode}). Default `"auto"` (legacy behaviour). */
+  mode?: CrawlMode;
   /** API base URL for `provider: "openai"` (e.g. `https://api.openai.com/v1`). */
   baseUrl?: string;
   /** API key for `provider: "openai"`. Falls back to `SAGECRAWL_API_KEY` / `OPENAI_API_KEY`. */
@@ -246,6 +266,8 @@ export declare const DEFAULT_OPTIONS: Required<
     | 'task'
     | 'model'
     | 'provider'
+    | 'noAi'
+    | 'mode'
     | 'browser'
     | 'concurrency'
     | 'maxPages'

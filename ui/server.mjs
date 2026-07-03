@@ -108,13 +108,20 @@ async function handleStart(req, res) {
     return json(res, 400, { error: 'no targets' });
   }
 
-  const run = crawlDocs(targets, {
-    ...options,
-    // The Web UI is an app: always persist so History and Reshape work. The cache
-    // is rooted at the server's cwd by default (library callers save only on opt-in).
-    save: true,
-    onEvent: wireEvents(),
-  });
+  let run;
+  try {
+    run = crawlDocs(targets, {
+      ...options,
+      // The Web UI is an app: always persist so History and Reshape work. The cache
+      // is rooted at the server's cwd by default (library callers save only on opt-in).
+      save: true,
+      onEvent: wireEvents(),
+    });
+  } catch (err) {
+    // Contract violations are rejected synchronously (e.g. mode 'targeted' + noAi,
+    // unknown mode) — surface the reason, never a silent 500.
+    return json(res, 400, { error: String((err && err.message) || err) });
+  }
   trackRun(run);
 
   json(res, 200, { ok: true });

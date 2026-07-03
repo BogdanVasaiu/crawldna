@@ -130,7 +130,7 @@ come libreria · sinergia con le componenti esistenti · entrambe le visioni AI/
 | # | Titolo | Effetto | Sforzo | Stato |
 |---|--------|---------|--------|-------|
 | 19 | Modalità no-AI (crawl a zero chiamate modello) | fruibilità + costi | Basso | ✅ fatto (2026-07-02, da committare) |
-| 20 | `mode` esplicito (complete/targeted) — via lo sniffing della task | architettura + costi (−gate/scope in complete) | Medio | ☐ da fare |
+| 20 | `mode` esplicito (complete/targeted) — via lo sniffing della task | architettura + costi (−gate/scope in complete) | Medio | ✅ fatto (2026-07-03) |
 | 21 | Reveal a ciclo chiuso (misura, non giudizio) | precisione reveal — la missione | Medio-Alto | ☐ da fare |
 | 22 | Tier embeddings (`embedModel`) — ranking semantico multilingua | qualità ranking + Reshape | Medio | ☐ da fare |
 
@@ -1124,7 +1124,45 @@ Playwright (se si sceglie (a)); `npm publish --dry-run` pulito.
 ---
 
 ## #20 — `mode` esplicito (complete/targeted) — via lo sniffing della task
-**Effetto:** architettura + costi (−gate/scope in complete) · **Sforzo:** Medio · **Stato:** ☐
+**Effetto:** architettura + costi (−gate/scope in complete) · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-03)
+
+> **Implementato.** Opzione **`mode: 'complete' | 'targeted' | 'auto'`** (default `'auto'`
+> = comportamento attuale, pura retrocompatibilità per libreria/run salvate/resume).
+> Un'unica traduzione mode→interruttori del motore: `modeBehavior`
+> ([src/lib/task.mjs](src/lib/task.mjs)) → `{ docsShortcuts, scopeSections, linkGate }`;
+> la regex `isDocsTask` è consultata SOLO dal ramo `'auto'`. Consumatori: dispatch
+> strategia in [index.mjs](src/index.mjs); scoping per-pagina e link gate in
+> [crawl-page.mjs](src/engine/crawl-page.mjs) — in `complete` `decideFollow` segue tutti
+> i candidati in-scope SENZA toccare il transport (zero chiamate `links` e `scope` anche
+> con l'AI accesa; `minRelevance` opt-in continua a potare; best-first e cache invariati);
+> reveal + nav-plan restano AI. **`targeted`+`noAi` è rifiutato forte e sincrono**:
+> `crawlDocs` lancia con la spiegazione, la CLI mostra il motivo senza stack, il server
+> UI risponde 400 col messaggio, e nella UI il bottone "Only what the task asks" si
+> disabilita da solo (tooltip col perché) tornando a complete. Mode sconosciuto → errore,
+> mai coercizione silenziosa. CLI `--mode` (help + esempi); UI: segmento sempre visibile
+> _"What to extract: ⦿ Everything · the whole site ○ Only what the task asks"_ (default
+> complete, persistito in localStorage, la UI non manda MAI `'auto'`), hint per-mode e
+> task dichiaratamente opzionale in complete (placeholder dinamici). Tipi: `CrawlMode` +
+> `mode` + `noAi` (quest'ultimo mancava da #19) in index.d.ts; README (tabella opzioni,
+> sinossi CLI) e ARCHITECTURE (diagramma §3 + dispatch §5) aggiornati.
+>
+> **Verificato** ([test/mode.test.mjs](test/mode.test.mjs), 12 test nuovi, 135 totali,
+> offline): mapping `modeBehavior` (auto = storico); complete = zero chiamate gate contro
+> uno stub che risponderebbe l'OPPOSTO (follow nothing) + `minRelevance` ancora attivo;
+> targeted/auto consultano il gate e ne onorano il verdetto; dispatch reale via
+> `crawlDocs` su stub-site locale (complete+task-menù → `docs:llms-full`; auto+menù →
+> `agent`; targeted+task-docs → `agent`); complete+noAi = cella lecita della matrice
+> (0 chiamate totali, pagine intere); i due rifiuti espliciti. UI provata dal vivo nel
+> preview (interlock no-AI nei due sensi, POST `targeted`+`noAi` respinto 400, zero
+> errori console). ⏳ **Dal vivo:** con AI accesa su un sito reference, confermare
+> `byKind.links`/`byKind.scope` = 0 in complete e il calo dei token vs `'auto'`
+> (harness #12), con set di pagine ≥ dell'attuale profilo docs.
+>
+> _Decisioni prese:_ (a) `complete` riusa il profilo docs così com'è, incluso lo
+> scope-prefix dal primo segmento del path — per "tutto il sito" si punta alla root;
+> (b) il rifiuto `targeted`+`noAi` è un **throw sincrono** di `crawlDocs` (fail fast per
+> la libreria), incanalato pulito in CLI/UI; (c) la UI parte in `complete` di default
+> (il valore del tool è la completezza; targeted è la scelta consapevole).
 
 **Problema oggi.** La task fa due mestieri: istruzione semantica per l'AI E interruttore
 nascosto — la regex `isDocsTask` ([src/lib/task.mjs](src/lib/task.mjs)) sniffa la prosa e
@@ -1281,9 +1319,10 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
-_Ultimo aggiornamento: 2026-07-02 (sessione architetturale: regola #6 "il testo libero
-non pilota il motore", modalità no-AI #19 fatta, item #20–#22 + ordine aggiornato;
-in precedenza: revisione ingegneristica con verbale correzioni + item #13–#18).
+_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito FATTO — la task non pilota più
+il motore, `isDocsTask` sopravvive solo dentro `'auto'`; prossimi in ordine: #21 reveal
+a ciclo chiuso → #22 embeddings → #14 politeness. In precedenza: 2026-07-02 sessione
+architetturale — regola #6, no-AI #19 — e revisione ingegneristica #13–#18).
 sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) — vedi
 "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna le
 decisioni prese sotto ogni item._

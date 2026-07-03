@@ -15,7 +15,7 @@ import { assembleScan, assemblePerDocument } from './lib/layout.mjs';
 import { saveRun, scanIdFor, initRun, appendJournal, loadRunForResume, cacheRoot } from './lib/runs.mjs';
 import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf, siblingKey } from './lib/url.mjs';
-import { isDocsTask } from './lib/task.mjs';
+import { modeBehavior, MODES } from './lib/task.mjs';
 import { resolveLlm, checkModel, abortPendingLlm, llmDisabled } from './lib/llm.mjs';
 import { simhash, hamming } from './lib/simhash.mjs';
 
@@ -33,6 +33,19 @@ export const DEFAULT_OPTIONS = {
   // a large site may take LONGER overall (the AI link gate is what keeps a crawl small).
   // Pair with include/exclude, minRelevance or maxPages to contain it. The task still
   // matters deterministically: docs detection, best-first frontier ordering, route budget.
+  // Incompatible with mode 'targeted' (task-filtering IS the AI) — refused loudly.
+  mode: 'auto', // #20 — WHAT to extract, as an EXPLICIT choice (free text never drives
+  // the engine — rule #6):
+  //   'complete': everything reachable — completeness shortcuts (llms-full.txt /
+  //     sitemap) always tried, pages kept WHOLE, and ZERO link-gate/scoping calls
+  //     even with AI on (keep/drop is meaningless when the user asked for all; the
+  //     default-on mirror dedup contains follow-everything). AI still drives
+  //     reveal + nav-plan. Works with or without noAi.
+  //   'targeted': only what the task asks — AI link gate + per-page section scoping,
+  //     whatever language/wording the task uses. Requires AI (noAi is refused).
+  //   'auto' (default): the historical behaviour — a multilingual regex on the task
+  //     (isDocsTask) picks the docs path. Kept ONLY for backward compatibility with
+  //     existing callers and saved/resumed runs; the UI always sends an explicit mode.
   ollamaHost: undefined, // override the Ollama server URL (default: http://127.0.0.1:11434)
   baseUrl: undefined, // OpenAI-compatible API base URL (provider 'openai')
   apiKey: undefined, // API key (provider 'openai'); falls back to SAGECRAWL_API_KEY / OPENAI_API_KEY
@@ -160,6 +173,23 @@ function createEventStream() {
  */
 export function crawlDocs(targets, options = {}) {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+  // #20 — `mode` is an explicit contract, so misuse fails FAST and LOUD (a silent
+  // coercion would be exactly the invisible behaviour switch rule #6 forbids).
+  opts.mode = String(opts.mode || 'auto').toLowerCase();
+  if (!MODES.includes(opts.mode)) {
+    throw new Error(
+      `Unknown mode '${opts.mode}'. Valid modes: 'complete' (everything reachable, pages whole, ` +
+        `no link-gate/scoping), 'targeted' (only what the task asks — needs AI), ` +
+        `'auto' (legacy: the task text decides).`,
+    );
+  }
+  if (opts.mode === 'targeted' && opts.noAi) {
+    throw new Error(
+      "mode 'targeted' needs AI: deciding which links and sections match the task IS the model's " +
+        "job, so it cannot run with noAi. Use mode 'complete' (full crawl, zero model calls) or " +
+        'enable AI.',
+    );
+  }
   opts.concurrency = Math.max(1, Number(opts.concurrency) || 1);
   opts.maxPages = Math.max(0, Number(opts.maxPages) || 0);
   opts.maxActions = Math.max(1, Number(opts.maxActions) || 1);
@@ -517,7 +547,10 @@ export function crawlDocs(targets, options = {}) {
           emit({ type: 'resume', url: scan.url, restored: scan._resume.restored });
         }
         const target = { url: scan.url, task: scan.task };
-        if (isDocsTask(scan.task)) {
+        // #20 — the EXPLICIT mode picks the strategy; only 'auto' (legacy) still
+        // reads the task text. The docs profile is the completeness path: it tries
+        // llms-full.txt, then sitemap seeding, then falls back to the engine.
+        if (modeBehavior(opts.mode, scan.task).docsShortcuts) {
           await runDocsProfile(target, ctx);
         } else {
           await runGeneralCrawl(target, ctx);

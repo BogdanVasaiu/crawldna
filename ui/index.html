@@ -154,6 +154,8 @@
   .seg-btn:hover { color:var(--t1); background:rgba(255,255,255,.05); transform:none; }
   .seg-btn.active { color:var(--a); background:var(--s5); font-weight:600;
                     box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px var(--b3); }
+  .seg-btn:disabled { opacity:.35; cursor:not-allowed; }
+  .seg-btn:disabled:hover { color:var(--t3); background:transparent; }
 
   /* ---- custom select dropdown (model picker) ---- */
   .dropdown { position:relative; }
@@ -553,6 +555,16 @@
     <button id="addRow">+ add link</button>
 
     <div class="opts">
+      <!-- #20 — WHAT to extract is an explicit switch, never guessed from the task
+           wording. The UI always sends one of the two real modes ('auto' is the
+           library-only backward-compat value). -->
+      <label>What to extract</label>
+      <div class="seg" id="mode-seg" style="margin-bottom:6px">
+        <button type="button" class="seg-btn active" data-mode="complete">Everything · the whole site</button>
+        <button type="button" class="seg-btn" data-mode="targeted" id="mode-targeted">Only what the task asks</button>
+      </div>
+      <p class="hint" id="modeHint" style="margin:0 0 14px"></p>
+
       <div class="chk" style="margin:0 0 6px">
         <input type="checkbox" id="noAi" />
         <label for="noAi">Crawl without AI <span style="color:var(--t4)">— zero tokens, no model needed</span></label>
@@ -937,7 +949,7 @@ function addRow(url = '', task = '') {
 }
 addRow();
 
-$('addRow').onclick = () => addRow();
+$('addRow').onclick = () => { addRow(); refreshTaskPlaceholders(); };
 $('sharedToggle').onchange = (e) => {
   $('sharedWrap').classList.toggle('hidden', !e.target.checked);
   rowsEl.classList.toggle('shared', e.target.checked); // hide the now-redundant per-row task inputs
@@ -964,6 +976,7 @@ function collectOptions() {
     concurrency: Number($('concurrency').value) || 4,
     maxPages: Number($('maxPages').value) || 0,
   };
+  o.mode = uiMode; // #20 — always explicit from the segment; the UI never sends 'auto'
   if ($('noAi').checked) o.noAi = true; // wins over model/provider in the core
   if (provider === 'openai') {
     o.baseUrl = $('apiBaseUrl').value.trim() || undefined;
@@ -1189,11 +1202,50 @@ $('apiKey').onchange = refreshModels;
 $('apiModel').oninput = onApiModelInput;
 $('provider-seg').querySelectorAll('.seg-btn').forEach((b) => (b.onclick = () => setProvider(b.dataset.provider)));
 
+// ---------- what to extract (#20): explicit mode, complete | targeted ----------
+// The task text never flips engine behaviour from the UI: this segment does.
+let uiMode = 'complete';
+const MODE_HINTS = {
+  complete:
+    'Keeps <b>everything reachable</b> from each link, pages whole. Completeness shortcuts ' +
+    '(llms-full.txt / sitemap) are tried first and the AI never gates links or trims sections — ' +
+    'fewer tokens. The task is <b>optional</b> here: it names the output files; filtering can ' +
+    'come later, in Reshape.',
+  targeted:
+    'Follows and keeps <b>only what each task asks for</b>: the AI gates links and trims ' +
+    'off-task sections (verbatim), whatever language the task is written in. Needs AI — not ' +
+    'available with “Crawl without AI”.',
+};
+function refreshTaskPlaceholders() {
+  const ph = uiMode === 'complete'
+    ? 'optional — names the output (e.g. the docs · the menu); nothing is filtered in this mode'
+    : 'what to extract (e.g. the full menu · all documentation · the prices)';
+  rowsEl.querySelectorAll('.row .task').forEach((i) => (i.placeholder = ph));
+  $('sharedTask').placeholder = uiMode === 'complete' ? 'optional — names the output' : 'Extract all documentation';
+}
+function applyMode(m) {
+  uiMode = m;
+  $('mode-seg').querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+  $('modeHint').innerHTML = MODE_HINTS[m];
+  refreshTaskPlaceholders();
+}
+$('mode-seg').querySelectorAll('.seg-btn').forEach((b) => (b.onclick = () => {
+  if (b.disabled) return;
+  applyMode(b.dataset.mode);
+  try { localStorage.setItem('sagecrawl.mode', b.dataset.mode); } catch {}
+}));
+
 // No-AI mode: dim the whole provider/model setup (it's ignored by the core when
 // noAi is on) and show what the mode actually means. Persisted like the provider.
 function applyNoAi(on) {
   $('aiSetup').classList.toggle('ai-off', on);
   $('noAiHint').style.display = on ? '' : 'none';
+  // Mode 'targeted' IS the AI (link gate + section scoping), so with no-AI it
+  // disables itself — visibly, with the reason on the button, never silently.
+  const tBtn = $('mode-targeted');
+  tBtn.disabled = on;
+  tBtn.title = on ? 'Needs AI — untick “Crawl without AI” to use it' : '';
+  if (on && uiMode === 'targeted') applyMode('complete');
 }
 $('noAi').onchange = (e) => {
   applyNoAi(e.target.checked);
@@ -2077,8 +2129,14 @@ try {
   const savedApiModel = localStorage.getItem('sagecrawl.model.openai');
   if (savedApiModel) $('apiModel').value = savedApiModel;
   selectedModel = localStorage.getItem('sagecrawl.model') || '';
+  // Mode first, then no-AI: applyNoAi forces 'complete' if a saved 'targeted'
+  // clashes with a saved no-AI (targeted needs AI).
+  const savedMode = localStorage.getItem('sagecrawl.mode');
+  applyMode(savedMode === 'targeted' ? 'targeted' : 'complete');
   if (localStorage.getItem('sagecrawl.noAi') === '1') { $('noAi').checked = true; applyNoAi(true); }
-} catch {}
+} catch {
+  applyMode('complete');
+}
 renderHistory();
 let savedProvider = 'ollama';
 try { savedProvider = localStorage.getItem('sagecrawl.provider') || 'ollama'; } catch {}

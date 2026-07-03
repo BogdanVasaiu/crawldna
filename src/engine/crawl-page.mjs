@@ -1,15 +1,16 @@
 // The general per-page engine (§3): browser-first render -> exhaustive reveal of
 // hidden/dynamic content -> task-scoped verbatim extraction -> link discovery.
-// Universal: no per-site logic. AI judges task relevance for non-doc tasks; the
-// generic documentation task runs model-free (the reveal pass already handles
-// dynamic content).
+// Universal: no per-site logic. Whether the AI gates links / scopes sections is
+// decided by the EXPLICIT `mode` option (#20, see lib/task.mjs modeBehavior):
+// 'complete' keeps pages whole and follows all in-scope links (zero gate/scope
+// calls); 'targeted' judges both; 'auto' (legacy) derives it from the task text.
 
 import { isBrowserAvailable, newPage, browserError } from '../lib/browser.mjs';
 import { loadHtml } from '../lib/fetcher.mjs';
 import { extractMarkdown, splitBlocks, contentWordLen } from '../extract.mjs';
 import { revealAll } from './reveal.mjs';
 import { aiScopeContent, aiSelectLinks } from './decide.mjs';
-import { isDocsTask } from '../lib/task.mjs';
+import { modeBehavior } from '../lib/task.mjs';
 import { normalizeUrl, inScope, resolveUrl } from '../lib/url.mjs';
 import { taskTerms, scoreLink } from '../lib/relevance.mjs';
 import { settle } from '../lib/settle.mjs';
@@ -39,6 +40,13 @@ export async function decideFollow(ctx, task, candidateObjs) {
   const scoreOf = new Map();
   for (const c of candidateObjs) scoreOf.set(c.href, scoreLink(terms, c).score);
 
+  // #20 — in 'complete' mode there IS no link gate: the user asked for everything,
+  // so keep/drop has no meaning and every batch call would be a token spent to hear
+  // "follow it". The candidates below are followed as-is (minRelevance, an explicit
+  // opt-in, still prunes; best-first ordering still applies). 'auto'/'targeted'
+  // keep the gate. The AI stays where it earns its cost: reveal + nav-plan.
+  const gate = modeBehavior(ctx.options.mode, task).linkGate;
+
   const keep = [];
   const unknown = [];
   for (const c of candidateObjs) {
@@ -64,7 +72,14 @@ export async function decideFollow(ctx, task, candidateObjs) {
     }
   }
 
-  if (toJudge.length) {
+  if (toJudge.length && !gate) {
+    // Gate off (mode 'complete'): follow every remaining candidate, zero model calls.
+    // Cached like a gate verdict so re-seen hrefs stay O(1).
+    for (const c of toJudge) {
+      cache.set(c.href, true);
+      keep.push(c.href);
+    }
+  } else if (toJudge.length) {
     // Rank by relevance so the MOST on-task links are judged first. Then judge EVERY
     // candidate in batches of aiSelectLinks' cap (160): a page can carry more links than
     // one call fits, and a candidate the model never saw must not be recorded as
@@ -286,15 +301,15 @@ export async function crawlPageWithEngine(target, ctx) {
     return { page: null, links: [], failed: true };
   }
 
-  const docsTask = isDocsTask(task);
-
-  // Crawl-time scoping keeps only task-relevant SECTIONS, VERBATIM (custom tasks
-  // only; documentation pages are kept whole). This is the "stay focused" step —
-  // it drops off-task chrome (landing/footer/pricing) but NEVER transforms content.
-  // All task-driven filtering / reshaping / regrouping ("only the available slots",
-  // "prices as a table") is Phase 2 — the user asks for it AFTER the crawl, over the
-  // saved files, via aiReshape (see src/reshape.mjs). The crawl stays verbatim.
-  if (markdown && !docsTask) {
+  // Crawl-time scoping keeps only task-relevant SECTIONS, VERBATIM. Whether it
+  // runs is decided by the EXPLICIT mode (#20): 'complete' keeps pages whole;
+  // 'targeted' always scopes; 'auto' (legacy) scopes for non-doc tasks only.
+  // This is the "stay focused" step — it drops off-task chrome (landing/footer/
+  // pricing) but NEVER transforms content. All task-driven filtering / reshaping /
+  // regrouping ("only the available slots", "prices as a table") is Phase 2 — the
+  // user asks for it AFTER the crawl, over the saved files, via aiReshape
+  // (see src/reshape.mjs). The crawl stays verbatim.
+  if (markdown && modeBehavior(ctx.options.mode, task).scopeSections) {
     const scoped = await aiScopeContent({ llm: ctx.options.llm, task, title, markdown }).catch(() => null);
     if (scoped) {
       // Keep blocks in sync with the scoped markdown so reveal PROVENANCE survives

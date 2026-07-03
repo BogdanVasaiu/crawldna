@@ -60,6 +60,17 @@ Options:
                          needed; output is not task-filtered and big sites can
                          take longer — pair with --include/--exclude,
                          --min-relevance or --max-pages to contain the crawl
+                         (incompatible with --mode targeted, which IS the AI)
+  --mode <m>             what to extract — an explicit switch, not guessed from
+                         the task text (default: ${DEFAULT_OPTIONS.mode}):
+                           complete  everything reachable: llms-full.txt/sitemap
+                                     shortcuts tried first, pages kept WHOLE, no
+                                     AI link-gate/scoping calls (cheapest; works
+                                     with --no-ai too)
+                           targeted  only what the task asks: AI link gate +
+                                     section scoping, in any language (needs AI)
+                           auto      legacy: the task wording decides (kept for
+                                     backward compatibility of saved runs/scripts)
   --base-url <url>       API base URL for --provider openai
                          (e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1)
   --api-key <key>        API key for --provider openai
@@ -97,6 +108,9 @@ Examples:
   sagecrawl https://docusaurus.io/docs --task "Extract all documentation"
   sagecrawl https://pizzeria.example/menu --task "Extract the full menu"
   sagecrawl https://site.dev --no-ai --max-pages 50        # classic crawl + reveal, zero tokens
+  sagecrawl https://docs.dev --mode complete --model qwen3-coder:30b   # whole site, pages whole,
+                                                           # zero link-gate/scope calls
+  sagecrawl https://hotel.example --mode targeted --task "room prices" --model qwen3-coder:30b
   sagecrawl --url https://a.dev --task "Get pricing" --url https://b.dev --task "Get API docs"
   OPENAI_API_KEY=sk-… sagecrawl https://docs.dev --provider openai \\
     --base-url https://api.openai.com/v1 --model gpt-4o-mini
@@ -113,6 +127,7 @@ const OPTION_CONFIG = {
   model: { type: 'string' },
   provider: { type: 'string' },
   'no-ai': { type: 'boolean' },
+  mode: { type: 'string' },
   'base-url': { type: 'string' },
   'api-key': { type: 'string' },
   browser: { type: 'string' },
@@ -168,6 +183,7 @@ function optionsFromFlags(values) {
   if (values.model) o.model = values.model;
   if (values.provider) o.provider = values.provider;
   if (values['no-ai']) o.noAi = true;
+  if (values.mode) o.mode = values.mode;
   if (values['base-url']) o.baseUrl = values['base-url'];
   if (values['api-key']) o.apiKey = values['api-key'];
   if (values.browser) o.browser = values.browser;
@@ -315,7 +331,17 @@ async function runCrawl(values, positionals) {
     return;
   }
 
-  await driveRun(crawlDocs(targets, optionsFromFlags(values)));
+  // crawlDocs rejects contract violations synchronously (unknown --mode,
+  // --mode targeted + --no-ai): show the reason, not a stack trace.
+  let run;
+  try {
+    run = crawlDocs(targets, optionsFromFlags(values));
+  } catch (err) {
+    process.stderr.write(c(C.red, 'crawl failed: ' + (err && err.message ? err.message : err) + '\n'));
+    process.exitCode = 1;
+    return;
+  }
+  await driveRun(run);
 }
 
 // Complete an interrupted run (#13): restore its journaled pages, re-seed the
