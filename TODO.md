@@ -131,7 +131,7 @@ come libreria · sinergia con le componenti esistenti · entrambe le visioni AI/
 |---|--------|---------|--------|-------|
 | 19 | Modalità no-AI (crawl a zero chiamate modello) | fruibilità + costi | Basso | ✅ fatto (2026-07-02, da committare) |
 | 20 | `mode` esplicito (complete/targeted) — via lo sniffing della task | architettura + costi (−gate/scope in complete) | Medio | ✅ fatto (2026-07-03) |
-| 21 | Reveal a ciclo chiuso (misura, non giudizio) | precisione reveal — la missione | Medio-Alto | ☐ da fare |
+| 21 | Reveal a ciclo chiuso (misura, non giudizio) | precisione reveal — la missione | Medio-Alto | ✅ fatto (2026-07-03) |
 | 22 | Tier embeddings (`embedModel`) — ranking semantico multilingua | qualità ranking + Reshape | Medio | ☐ da fare |
 
 **Da fare per primi (qualità del crawl):** #1, #2, #3. *(fatti)*
@@ -1203,7 +1203,58 @@ README/ARCHITECTURE.
 ---
 
 ## #21 — Reveal a ciclo chiuso (misura, non giudizio)
-**Effetto:** precisione reveal — la missione · **Sforzo:** Medio-Alto · **Stato:** ☐
+**Effetto:** precisione reveal — la missione · **Sforzo:** Medio-Alto · **Stato:** ✅ FATTO (2026-07-03)
+
+> **Implementato**, tutti e quattro i pezzi, più un bug reale trovato dai test:
+> - **(a) Consenso meccanico + multilingue.** Split sensore/decisione: perceive
+>   ([perceive.mjs](src/engine/perceive.mjs)) MISURA (bottoni visibili in overlay vero —
+>   fixed/sticky/dialog/aria-modal — con label, area, testo dell'overlay), il nuovo modulo
+>   puro [consent.mjs](src/engine/consent.mjs) DECIDE: overlay riconosciuto consent dal suo
+>   testo (`cookie|consent|gdpr|privacy|rgpd|dsgvo`) → micro-lessico ~40 stem multilingue
+>   (17 lingue, legge il BANNER non il sito) con **reject preferito** su accept, poi
+>   dismiss, poi **bottone primario per geometria** (solo dentro banner consent); overlay
+>   NON-consent (newsletter/interstitial) → solo dismiss/close, MAI l'azione primaria di
+>   un modal arbitrario. Evento `action: dismiss overlay` per l'osservabilità.
+> - **(b) Triage arbitrato dalla misura.** perceive misura per candidato lo
+>   `hiddenPayload` (testo del target `aria-controls` invisibile / sibling nascosto /
+>   `<details>` chiuso) + `expanded` (aria-expanded). In [reveal.mjs](src/engine/reveal.mjs):
+>   un "no" del modello (anche cachato cross-page) è SCAVALCATO da payload ≥ 200 char
+>   (`PAYLOAD_MIN`); senza giudice (no-AI/outage) si approva TUTTO (ogni candidato ha già
+>   passato il vaglio meccanico di perceive) e l'ORDINAMENTO misurato (`revealPriority`:
+>   aria-expanded=false > payload pesato > kind specifico > hint label) decide chi prende
+>   il budget. `DISCLOSURE_LABEL` inglese declassato a hint di ordinamento — via il gap
+>   lessicale del caso "Servizi".
+> - **(c) Load-more comportamentale.** Un controllo in-place che ha AGGIUNTO contenuto,
+>   esiste ancora e ha fatto CRESCERE la pagina (append, non swap) viene ricliccato fino a
+>   saturazione (il dedup del BlockAccumulator ferma i toggle open/close dopo un probe da
+>   ~1s — prezzo accettato). `LOADMORE` inglese resta solo fast-path di efficienza.
+> - **(d) Audit del residuo = uscita misurata.** perceive misura `hiddenResidualChars`
+>   (testo nascosto nel main content, elemento nascosto più esterno, esclusi
+>   template/script/style/aria-hidden, briciole <40 char ignorate; sostituisce il mai
+>   consumato `hiddenCount`). All'uscita del loop: numero in `page.meta.revealResidualChars`
+>   (0 = drenaggio misurato), accumulo in `scan.stats.revealResidual {pages, chars}` (+
+>   run-level, + replay resume), warning advisory `reveal-residual` ("~N words…", suggerisce
+>   --max-actions se hitCap) sopra 1200 char — mai bloccante. Metrica pura `revealResidual`
+>   in [src/eval/metrics.mjs](src/eval/metrics.mjs), riga "(a) reveal residual" nel report
+>   #12. Tipi (`PageMeta.revealResidualChars`, `Stats.revealResidual`) e README aggiornati.
+> - **🐛 Bug reale trovato dal test (anche in AI mode):** `aiPlanNavigation` leggeva la
+>   risposta documentata `{"direction":null}` come **direction=0** (`Number(null)===0`,
+>   [decide.mjs](src/engine/decide.mjs)) → il loop RISERVAVA il primo controllo approvato a
+>   un walk mai eseguito e **non lo cliccava mai** (contenuto perso in silenzio). Fix
+>   null-safe + guardia in reveal.mjs (un piano senza target = nessun piano) + regression
+>   test dedicato.
+>
+> **Verificato** ([test/consent.test.mjs](test/consent.test.mjs) 9 test multilingua:
+> IT/DE/FR/RU/ZH chiusi, reject preferito, newsletter mai "Subscribe", link policy mai
+> cliccati; [test/reveal-loop.test.mjs](test/reveal-loop.test.mjs) 6 test col loop VERO su
+> FakePage senza browser: 'Mehr anzeigen' esaurito per comportamento, "Servizi"
+> listener-only cliccato per primo in no-AI, "no" AI scavalcato dal payload E "no" senza
+> payload onorato, residuo ritornato+warning, residuo 0 silenzioso; 151/151 verdi).
+> ⏳ **Dal vivo:** A/B `revealCoverage` AI-on vs no-AI su siti reference (il no-AI non deve
+> perdere contenuto noto); banner reali non-inglesi; residuo≈0 sulle pagine reference; la
+> misura in-page di payload/residuo gira solo nel browser vero → da osservare su un crawl
+> reale. _Regola d'oro confermata:_ ogni gap futuro diventa un segnale MECCANICO nuovo,
+> non una parola in più nel lessico.
 
 **Problema oggi.** Il loop di reveal esce quando "non trova più controlli approvati" —
 un giudizio (dell'AI o dell'euristica), non una prova. E tre lessici English-only
@@ -1319,10 +1370,12 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
-_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito FATTO — la task non pilota più
-il motore, `isDocsTask` sopravvive solo dentro `'auto'`; prossimi in ordine: #21 reveal
-a ciclo chiuso → #22 embeddings → #14 politeness. In precedenza: 2026-07-02 sessione
-architetturale — regola #6, no-AI #19 — e revisione ingegneristica #13–#18).
+_Ultimo aggiornamento: 2026-07-03 (#20 `mode` esplicito e #21 reveal a ciclo chiuso
+FATTI — la task non pilota più il motore, il reveal esce su una MISURA e il residuo
+nascosto è un numero per-pagina; trovato e corretto anche il bug `direction:null→0`
+di aiPlanNavigation. Prossimi in ordine: #22 embeddings → #14 politeness.
+In precedenza: 2026-07-02 sessione architetturale — regola #6, no-AI #19 — e
+revisione ingegneristica #13–#18).
 sagecrawl è uno strumento GENERALE (refdna è solo un consumatore) — vedi
 "Posizionamento". Aggiorna lo "Stato" (☐ → ✅) man mano che implementi, e segna le
 decisioni prese sotto ogni item._

@@ -24,17 +24,45 @@
 // per-control re-use cap guarantee termination.
 
 import { perceive } from './perceive.mjs';
+import { pickConsent } from './consent.mjs';
 import { clickRevealer, scrollStep } from './actions.mjs';
 import { settle } from '../lib/settle.mjs';
 import { extractMarkdown, BlockAccumulator } from '../extract.mjs';
 import { aiSelectRevealers, aiPlanNavigation } from './decide.mjs';
+
+// #21b — the measurement thresholds of the closed loop. PAYLOAD_MIN: a control
+// with at least this many characters of MEASURED hidden text behind it (its
+// aria-controls target, a hidden sibling panel, an unopened <details>) is
+// revealed even when a judge said no — ~30 words is real content, above
+// menu-crumb noise, and the cost of a wrong override is one click (~1s) while
+// the cost of a wrong "no" is lost content (rule #1). RESIDUAL_WARN_CHARS: the
+// exit audit warns when at least this much text is still hidden at the end.
+export const PAYLOAD_MIN = 200;
+export const RESIDUAL_WARN_CHARS = 1200;
+
+/**
+ * #21b — rank approved controls by MEASURED signals, so the action budget goes
+ * to provable content first: a closed disclosure (aria-expanded="false") is
+ * mechanical proof there is something to open; a measured hidden payload
+ * likewise (weighted by size); a specific kind (tab/expander/dropdown/loadmore)
+ * beats the generic 'control'; the label heuristic is only a last-place hint
+ * (English-biased, no longer load-bearing). Pure; exported for the tests.
+ */
+export function revealPriority(c) {
+  return (
+    (c.expanded === 'false' ? 4 : 0) +
+    ((c.hiddenPayload || 0) > 0 ? 2 + Math.min(1, (c.hiddenPayload || 0) / 2000) : 0) +
+    (c.kind && c.kind !== 'control' ? 1 : 0) +
+    (c.heuristic ? 0.5 : 0)
+  );
+}
 
 /**
  * @param {import('playwright').Page} page
  * @param {object} ctx  crawl context (emit, shouldStop, options)
  * @param {string} url  the page URL (for events)
  * @param {string} [task]  the crawl task (context for the AI reveal triage)
- * @returns {Promise<{ markdown, title, links, navLinks, routes, hitCap }>}
+ * @returns {Promise<{ markdown, title, links, navLinks, routes, hitCap, hiddenResidualChars }>}
  */
 export async function revealAll(page, ctx, url, task) {
   const acc = new BlockAccumulator();
@@ -114,11 +142,12 @@ export async function revealAll(page, ctx, url, task) {
 
   // AI-driven discovery: let the model read the candidate controls and decide
   // which actually hide content (catching non-obvious ones, rejecting demos),
-  // caching the verdict per signature so each control is judged once. Falls back
-  // to the per-candidate heuristic when the model is unavailable — so coverage
-  // never drops below the old deterministic behaviour. New candidates that only
-  // appear AFTER a reveal are triaged in the next loop pass (a few batched calls
-  // per page, never a per-click model loop).
+  // caching the verdict per signature so each control is judged once. #21b: the
+  // model's "no" is overridden by a MEASURED hidden payload, and with no model
+  // at all (no-AI, outage) every candidate is approved with the measured
+  // ordering deciding who gets the budget — so coverage never depends on any
+  // lexicon. New candidates that only appear AFTER a reveal are triaged in the
+  // next loop pass (a few batched calls per page, never a per-click model loop).
   const triage = async (candidates) => {
     // First resolve from the cross-page cache (no model call), and collect only the
     // genuinely-new controls for the AI. On the 2nd+ page of a uniform docs site this
@@ -127,8 +156,11 @@ export async function revealAll(page, ctx, url, task) {
     for (const c of candidates) {
       if (decided.has(c.signature)) continue;
       const key = revealKey(c);
-      if (key && revealCache.has(key)) decided.set(c.signature, revealCache.get(key));
-      else undecided.push(c);
+      if (key && revealCache.has(key)) {
+        // #21b: even a cached "no" yields to THIS page's measured payload — the
+        // cache carries the model's judgment, the measurement is per-page.
+        decided.set(c.signature, revealCache.get(key) || (c.hiddenPayload || 0) >= PAYLOAD_MIN);
+      } else undecided.push(c);
     }
     if (!undecided.length) return;
     // Judge EVERY undecided candidate, in batches of the model call's cap. A single
@@ -145,26 +177,41 @@ export async function revealAll(page, ctx, url, task) {
         chosen = null;
       }
       for (const c of batch) {
-        const verdict = chosen ? chosen.has(c.signature) : !!c.heuristic;
+        const modelSays = chosen ? chosen.has(c.signature) : null;
+        // #21b — MEASUREMENT ARBITRATES THE JUDGE. An AI "no" on a control with
+        // real measured hidden payload is overridden: the judge's error becomes
+        // harmless (one extra click at worst, never lost content). And with no
+        // judge at all (no-AI mode, model outage) EVERY candidate is approved —
+        // each already survived perceive's mechanical gauntlet (interactive,
+        // visible, enabled, not a copy/share action); a wasted click costs ~1s,
+        // missed content is irrecoverable (rule #1). The measured ORDERING
+        // (revealPriority) decides who gets the budget first, so approving all
+        // never starves the provable payloads. This retires the English
+        // DISCLOSURE_LABEL heuristic as a gate — no more lexicon gaps in no-AI.
+        const verdict = chosen ? modelSays || (c.hiddenPayload || 0) >= PAYLOAD_MIN : true;
         decided.set(c.signature, verdict);
-        // Persist only a MODEL verdict (not the page-local heuristic fallback) and only
-        // for labelled controls, so the cache carries real cross-page judgments.
+        // Persist only the RAW MODEL verdict for labelled controls — the payload
+        // override is a per-page measurement and must not leak across pages.
         const key = revealKey(c);
-        if (key && chosen) revealCache.set(key, verdict);
+        if (key && chosen) revealCache.set(key, modelSays);
       }
     }
   };
 
-  // Dismiss cookie/consent overlays once so they don't block content.
+  // Dismiss cookie/consent overlays once so they don't block content. perceive
+  // MEASURES the overlay buttons; pickConsent (#21a) DECIDES — multilingual
+  // micro-lexicon read off the banner itself, reject preferred over accept,
+  // primary-by-geometry only for consent banners with exotic wording.
   const consentSeen = new Set();
   const dismissConsent = async () => {
     const p = await perceive(page);
-    for (const c of p.consent || []) {
+    for (const c of pickConsent(p.consentCandidates)) {
       if (ctx.shouldStop()) break;
       const sig = c.label.toLowerCase();
       if (consentSeen.has(sig)) continue;
       consentSeen.add(sig);
       const r = await clickRevealer(page, c.id);
+      ctx.emit({ type: 'action', url, action: 'click', detail: `dismiss overlay: ${c.label}` });
       if (!r.navigatedTo) await capture();
     }
   };
@@ -217,7 +264,12 @@ export async function revealAll(page, ctx, url, task) {
     for (const r of perception.routes) allRoutes.add(r);
 
     await triage(perception.revealers);
-    const approved = perception.revealers.filter((r) => decided.get(r.signature));
+    // #21b — measured signals order the work: provable payloads first, so a tight
+    // action budget is never spent on generic controls while a closed disclosure
+    // with real text behind it waits. Stable sort: ties keep perception order.
+    const approved = perception.revealers
+      .filter((r) => decided.get(r.signature))
+      .sort((a, b) => revealPriority(b) - revealPriority(a));
 
     // Plan navigation ONCE (the crawl4ai-style split: AI plans, loop executes). The
     // model names the control that advances toward the task's target and a literal
@@ -234,8 +286,13 @@ export async function revealAll(page, ctx, url, task) {
       } catch {
         plan = null;
       }
+      // A plan needs BOTH halves: the direction control AND the target marker.
+      // A direction without a target can never be walked toward (the targeted
+      // walk (A) requires `navPlan.target`), yet it would still be EXCLUDED
+      // from the explore branch (B) — a control reserved for a walk that never
+      // runs is a control never clicked, i.e. silently lost content (rule #1).
       navPlan =
-        plan && plan.direction != null
+        plan && plan.direction != null && plan.target
           ? { directionSig: approved[plan.direction].signature, target: plan.target }
           : null; // null = open-ended / no targeted navigation
     }
@@ -378,6 +435,32 @@ export async function revealAll(page, ctx, url, task) {
       // IN-PLACE reveal (tab/accordion/expander/slot panel): a leaf, done once.
       doneLeaf.add(next.signature);
       if (newState) visited.add(after.fingerprint);
+      // #21c — BEHAVIOURAL load-more: a control that just ADDED content, still
+      // exists, and GREW the page (append — a tab swap keeps the height) behaves
+      // like "load more" whatever language its label is in. Keep re-clicking it
+      // until it stops yielding: the BlockAccumulator dedup makes re-shown
+      // content add 0 blocks, so an open/close toggle (accordion) stops after
+      // one probe click — the accepted ~1s price for never missing an
+      // incremental loader with a non-English label. Bounded by the action
+      // budget. The English LOADMORE label survives only as the fast path
+      // (kind 'loadmore' exhausts immediately, no growth evidence needed).
+      if (added && selfPresent && (after.scrollHeight || 0) > (perception.scrollHeight || 0) + 120) {
+        let tries = 0;
+        while (tries++ < 40 && actions < maxActions && !ctx.shouldStop()) {
+          const fresh = await perceive(page);
+          const same = fresh.revealers.find((r) => r.signature === next.signature);
+          if (!same) break;
+          const res2 = await clickRevealer(page, same.id);
+          actions++;
+          if (res2.navigatedTo) {
+            navLinks.add(res2.navigatedTo);
+            break;
+          }
+          const more = await capture(label, provenance);
+          if (!more) break;
+          ctx.emit({ type: 'action', url, action: 'click', detail: `load more (measured): ${next.label || '(unlabelled)'} (+${more})` });
+        }
+      }
       // STICKY-SELECTION RESTORE. Some views make a pick "stick": selecting one item
       // changes the view's state and then the SIBLINGS stop responding until the view
       // is re-rendered (this calendar — once day 2's slots open, clicking day 3/6/7…
@@ -456,6 +539,29 @@ export async function revealAll(page, ctx, url, task) {
   for (const l of lastPerception.links) if (!allLinks.has(l.href)) allLinks.set(l.href, l.label);
   for (const r of lastPerception.routes) allRoutes.add(r);
 
+  // #21d — THE EXIT AUDIT. How much text is still hidden in the main content
+  // when the loop ends? residual ≈ 0 is a MEASURED completeness statement for
+  // this page's DOM (content that only exists after an un-clicked AJAX call is
+  // invisible to any static measure — that is what the click walk above is
+  // for). A large residual becomes a per-page, machine-readable number in
+  // page.meta / scan stats plus this warning — advisory, never blocking:
+  // skeleton/placeholder boilerplate can false-positive, and a warning that
+  // stopped the crawl would be worse than the gap it reports.
+  const hiddenResidualChars = lastPerception.hiddenResidualChars || 0;
+  if (hiddenResidualChars >= RESIDUAL_WARN_CHARS) {
+    const words = Math.round(hiddenResidualChars / 6);
+    ctx.emit({
+      type: 'warn',
+      url,
+      reason: 'reveal-residual',
+      message:
+        `~${words} words of text remain hidden ` +
+        (hitCap
+          ? 'behind controls the action budget did not reach — raise --max-actions for full coverage.'
+          : 'behind elements no detected control reveals (measured, not judged).'),
+    });
+  }
+
   const links = [...allLinks.entries()].map(([href, label]) => ({ href, label }));
   return {
     markdown: acc.toMarkdown(),
@@ -465,5 +571,6 @@ export async function revealAll(page, ctx, url, task) {
     navLinks: [...navLinks],
     routes: [...allRoutes],
     hitCap,
+    hiddenResidualChars,
   };
 }

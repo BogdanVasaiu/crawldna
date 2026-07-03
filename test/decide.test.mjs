@@ -256,6 +256,21 @@ test('aiPlanNavigation validates the planned direction and target', async () => 
   assert.equal(calls, 0, 'no controls = no model call');
 });
 
+test('aiPlanNavigation: the documented {"direction":null} answer is NOT misread as index 0', async () => {
+  // Number(null) is 0 — this used to turn "no navigation" into "reserve the
+  // first control for a walk that never runs", so that control was never
+  // clicked at all (silent lost content; found by the #21 closed-loop tests).
+  const controls = [
+    { signature: 's1', kind: 'control', label: 'apri dettagli' },
+    { signature: 's2', kind: 'control', label: 'successivo' },
+  ];
+  reset(() => '{"direction":null,"target":null}');
+  assert.deepEqual(await aiPlanNavigation({ llm, task: 'estrai tutto', current: {}, controls }), {
+    direction: null,
+    target: null,
+  });
+});
+
 // --- no-AI mode (noAi → provider 'none') ---------------------------------------
 // The deliberate zero-token mode: every phase-1 judgment must short-circuit to its
 // completeness-bias fallback BEFORE the transport. Each stub handler below would

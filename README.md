@@ -242,7 +242,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
 {
   scans: [ {                          // one entry per submitted link
     scanId, index, url, task, title,
-    pages: [ { url, task, title, markdown, meta: { strategy, framework?, fetchedAt, bytes } } ],
+    pages: [ { url, task, title, markdown, meta: { strategy, framework?, fetchedAt, bytes, revealResidualChars } } ],
     files: [ { filename, title, markdown, bytes, pages: [url, …] } ],  // the verbatim .md, in memory
     documents: [ { id, url, title, fetchedAt, bytes, markdown, headings, file } ],  // only when perDocument:true
     stats, warnings,
@@ -251,6 +251,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
     pages, durationMs,
     strategyCounts: { 'docs:llms-full', 'docs:sitemap', agent },
     tokens: { calls, inputTokens, outputTokens, byKind: { reveal, scope, links, 'nav-plan', … } },  // AI cost, split by call type
+    revealResidual: { pages, chars },  // reveal exit audit: kept pages that ended with text still hidden
   },
   warnings: [ { url?, reason, message } ],
   run: { id, dir, scans } | null,     // null unless the run was SAVED (see below)
@@ -291,7 +292,13 @@ and works the same way on any site — no per-framework special-casing.
    Interactive controls are found not just by selectors but by a
    **listener-sniffer** that tags any element with a JS click handler, so
    non-obvious widgets aren't missed. Site chrome (nav/header/footer) is skipped
-   and cookie/consent banners are dismissed once.
+   and cookie/consent banners are dismissed once (multilingual — the banner's own
+   buttons are read, preferring *reject*). The loop is **closed by measurement**,
+   not judgment: a control with measurable hidden text behind it is clicked even
+   if a judge said no; a control that keeps *adding* content is re-clicked to
+   saturation whatever its label's language; and at exit the engine measures the
+   text still hidden — `meta.revealResidualChars` per page (`0` = measurably
+   drained), with an advisory warning when real mass remains.
 3. **Extract** the revealed content to clean, **verbatim** Markdown.
 4. **Decide relevance with AI** (for non-documentation tasks): keep only the
    sections that belong to the task — "extract the pizza menu", "extract the

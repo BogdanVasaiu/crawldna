@@ -38,6 +38,37 @@ function round(n, d = 3) {
 }
 
 /**
+ * (a)(iii) REVEAL RESIDUAL (#21d) — the closed loop's own completeness number, read from
+ * the crawl result itself (no golden set needed): for each kept page, how much text was
+ * STILL hidden in the main content when the reveal loop exited (`meta.revealResidualChars`,
+ * measured in-page — 0 = the page was drained). Complements revealCoverage: coverage
+ * checks KNOWN snippets survived, residual measures what provably did NOT come out.
+ *
+ * @param {Array<{url:string, meta?:{revealResidualChars?:number}}>} pages  kept pages
+ * @returns {{ pages:number, withResidual:number, chars:number, words:number,
+ *             worst:Array<{url:string,chars:number}> }}
+ */
+export function revealResidual(pages = []) {
+  const rows = [];
+  let chars = 0;
+  for (const p of pages || []) {
+    const c = (p && p.meta && p.meta.revealResidualChars) || 0;
+    if (c > 0) {
+      rows.push({ url: p.url, chars: c });
+      chars += c;
+    }
+  }
+  rows.sort((a, b) => b.chars - a.chars);
+  return {
+    pages: (pages || []).length,
+    withResidual: rows.length,
+    chars,
+    words: Math.round(chars / 6),
+    worst: rows.slice(0, 5),
+  };
+}
+
+/**
  * (a)(i) REVEAL COMPLETENESS — did the interaction-hidden content survive into the
  * output? Each `expected` string is a snippet that a human confirmed is present on the
  * page ONLY after a click (a tab's body, an accordion's text, a "load more" item). If it

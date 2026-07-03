@@ -149,6 +149,12 @@ export interface PageMeta {
   framework?: string;
   fetchedAt?: string;
   bytes?: number;
+  /**
+   * The reveal exit audit (#21): characters of text still hidden in the page's main
+   * content when the reveal loop ended. `0` = the page was measurably drained.
+   * Present on browser-engine pages (`strategy: "agent"`); absent on static paths.
+   */
+  revealResidualChars?: number;
 }
 
 export interface Page {
@@ -195,6 +201,9 @@ export interface Stats {
   /** Pages dropped as duplicates, by tier: `exact` (sha1), `mirror` (URL-sibling +
    *  SimHash, default on), `near` (cross-path SimHash, opt-in). */
   deduped?: { exact: number; mirror: number; near: number };
+  /** Reveal exit audit (#21): how many kept pages ended with text still hidden, and the
+   *  total hidden characters. `{ pages: 0, chars: 0 }` = every page measurably drained. */
+  revealResidual?: { pages: number; chars: number };
 }
 
 export interface Warning {

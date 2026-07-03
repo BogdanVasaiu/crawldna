@@ -123,36 +123,51 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
       let rid = 0;
 
       // ---- consent / overlay dismissals (page-wide, one-time) -------------
-      // Only a button that lives in a real OVERLAY (position:fixed/sticky, a dialog
-      // role, or aria-modal) qualifies. The labels alone are far too generic —
-      // "Continue", "OK", "Close" also caption wizard steps, calendars and forms in
-      // the page flow, and blindly clicking those BEFORE the baseline capture mutates
-      // the very state the reveal pass is about to explore. Cookie/consent banners are
-      // essentially always fixed or modal, so the overlay test is the universal signal
-      // that separates them from in-content controls.
-      const inOverlay = (el) => {
+      // #21a — this block only MEASURES; the decision (which button to click,
+      // reject-first, multilingual lexicon, primary-by-geometry) lives in
+      // engine/consent.mjs where it is pure and unit-tested. A candidate must
+      // live in a real OVERLAY (position:fixed/sticky, a dialog role, or
+      // aria-modal): generic labels ("Continue", "OK", "Close") also caption
+      // wizard steps and forms in the page flow, and clicking those BEFORE the
+      // baseline capture mutates the very state the reveal pass is about to
+      // explore. Banners are essentially always fixed or modal, so the overlay
+      // test is the universal signal that separates them from content controls.
+      const overlayRootOf = (el) => {
         let n = el;
         while (n && n !== document.documentElement) {
           const role = (n.getAttribute && n.getAttribute('role')) || '';
-          if (/^(dialog|alertdialog)$/i.test(role)) return true;
-          if (n.getAttribute && n.getAttribute('aria-modal') === 'true') return true;
+          if (/^(dialog|alertdialog)$/i.test(role)) return n;
+          if (n.getAttribute && n.getAttribute('aria-modal') === 'true') return n;
           const pos = getComputedStyle(n).position;
-          if (pos === 'fixed' || pos === 'sticky') return true;
+          if (pos === 'fixed' || pos === 'sticky') return n;
           n = n.parentElement;
         }
-        return false;
+        return null;
       };
-      const consent = [];
-      const CONSENT_RE = /\b(accept|agree|got it|i understand|okay|ok\b|allow all|consent|dismiss|continue|reject all|close)\b/i;
-      for (const el of document.querySelectorAll('button, [role=button], a')) {
-        if (consent.length >= 6) break;
+      const consentCandidates = [];
+      const overlayTexts = new Map(); // overlay element -> its text sample (computed once)
+      for (const el of document.querySelectorAll('button, [role=button], input[type=button], input[type=submit], a')) {
+        if (consentCandidates.length >= 24) break;
         if (!isVisible(el)) continue;
         const label = labelOf(el);
-        if (label && label.length < 40 && CONSENT_RE.test(label) && inOverlay(el)) {
-          el.setAttribute('data-sagecrawl-id', String(rid));
-          consent.push({ id: rid, label });
-          rid++;
+        if (!label || label.length >= 60) continue;
+        const overlay = overlayRootOf(el);
+        if (!overlay) continue;
+        let overlayText = overlayTexts.get(overlay);
+        if (overlayText === undefined) {
+          overlayText = ((overlay.innerText || '').replace(/\s+/g, ' ').trim()).slice(0, 400);
+          overlayTexts.set(overlay, overlayText);
         }
+        const r = el.getBoundingClientRect();
+        el.setAttribute('data-sagecrawl-id', String(rid));
+        consentCandidates.push({
+          id: rid,
+          label,
+          area: Math.round(r.width * r.height),
+          overlayText,
+          href: el.tagName === 'A' ? el.getAttribute('href') || '' : '',
+        });
+        rid++;
       }
 
       // ---- revealers, scoped to the main content --------------------------
@@ -215,19 +230,42 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         // click. This is universal (not per-site), so it stays a hard filter.
         if (NON_CONTENT.test(label)) continue;
 
-        // Heuristic guess "this likely reveals content", used ONLY as the FALLBACK
-        // when the AI triage (aiSelectRevealers) is unavailable. The AI is the
-        // primary judge — it can approve a generic/unlabelled control hiding
-        // content in an improbable place that this regex would miss, and reject a
-        // live-demo widget (date-picker/slider/stepper) the regex can't tell apart.
-        // So we now KEEP every interactive candidate and let the model decide.
+        // Heuristic guess "this likely reveals content" — since #21b no longer a
+        // gate (no-AI approves every candidate), only an ORDERING hint plus extra
+        // context for the model. English-biased by nature, which is exactly why
+        // it stopped being load-bearing.
         const DISCLOSURE_LABEL =
           /\b(show|view|see|load|read|expand)\b[^.]{0,20}\b(more|all|less|api|details?|code|example|source|reference)\b|toggle|inline api|reveal|full (?:api|list)/i;
         const heuristic = kind !== 'control' || DISCLOSURE_LABEL.test(label);
 
+        // #21b — MEASURE the hidden payload behind this control instead of
+        // guessing from words: the text mass of its aria-controls target when
+        // that target is currently invisible, else of a hidden sibling panel
+        // (accordion body next to its header), else the unopened remainder of a
+        // <details>. A measured payload is mechanical proof the control hides
+        // content — it later overrides a wrong "no" from any judge (AI or
+        // heuristic), and ranks candidates when there is no judge at all.
+        let hiddenPayload = 0;
+        if (ariaControls) {
+          for (const tid of ariaControls.split(/\s+/)) {
+            const t = document.getElementById(tid);
+            if (t && !isVisible(t)) hiddenPayload += ((t.textContent || '').replace(/\s+/g, ' ').trim()).length;
+          }
+        }
+        if (!hiddenPayload) {
+          const sib = el.nextElementSibling;
+          if (sib && !isVisible(sib)) hiddenPayload += ((sib.textContent || '').replace(/\s+/g, ' ').trim()).length;
+        }
+        if (!hiddenPayload && tag === 'summary' && el.parentElement && el.parentElement.tagName === 'DETAILS' && !el.parentElement.open) {
+          const whole = ((el.parentElement.textContent || '').replace(/\s+/g, ' ').trim()).length;
+          const own = ((el.textContent || '').replace(/\s+/g, ' ').trim()).length;
+          hiddenPayload += Math.max(0, whole - own);
+        }
+        const expanded = ariaExpanded; // raw aria-expanded value ('false' = closed disclosure)
+
         const signature = `${role}|${label}|${ariaControls}|${kind}`;
         el.setAttribute('data-sagecrawl-id', String(rid));
-        revealers.push({ id: rid, kind, label, role, cls: cls.slice(0, 60), context: nearestHeading(el), heuristic, signature });
+        revealers.push({ id: rid, kind, label, role, cls: cls.slice(0, 60), context: nearestHeading(el), heuristic, signature, hiddenPayload, expanded });
         rid++;
       }
 
@@ -256,11 +294,31 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         links.push({ label: labelOf(a), href: abs });
       }
 
-      // ---- hidden content present (for warnings) --------------------------
-      let hiddenCount = 0;
-      for (const el of mainEl.querySelectorAll('[hidden],[aria-hidden=true]')) {
-        if ((el.textContent || '').trim().length > 40) hiddenCount++;
-        if (hiddenCount > 999) break;
+      // ---- #21d: audit of the STILL-HIDDEN text in the main content -------
+      // The closed loop's measure: how many characters of real text remain
+      // invisible right now? Counted on the TOPMOST hidden element only (a
+      // hidden subtree is one payload, not N), skipping <template>/<script>/
+      // <style> and aria-hidden=true (decorative/duplicated boilerplate by
+      // contract) and ignoring crumbs. Revealing content makes this number
+      // FALL — so "residual ≈ 0" is a measured completeness statement, not a
+      // judgment. It travels to page.meta / stats / a warning in the caller.
+      let hiddenResidualChars = 0;
+      {
+        const skip = (el) =>
+          el.tagName === 'TEMPLATE' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' ||
+          el.getAttribute('aria-hidden') === 'true';
+        const stack = [...mainEl.children];
+        let visits = 0;
+        while (stack.length && visits++ < 20000) {
+          const el = stack.pop();
+          if (skip(el)) continue;
+          if (!isVisible(el)) {
+            const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (t.length > 40) hiddenResidualChars += t.length;
+            continue; // topmost hidden only — never double-count its children
+          }
+          for (const c of el.children) stack.push(c);
+        }
       }
 
       // ---- routes mined from scripts/JSON ---------------------------------
@@ -297,9 +355,9 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         title: document.title,
         mainText,
         revealers,
-        consent,
+        consentCandidates,
         links,
-        hiddenCount,
+        hiddenResidualChars,
         routes: [...routes],
         scrollHeight: document.body.scrollHeight,
       };

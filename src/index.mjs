@@ -268,7 +268,7 @@ export function crawlDocs(targets, options = {}) {
     pages: [],
     files: [],
     documents: [], // per-page format, populated only when opts.perDocument is on (#10)
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 } },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 }, revealResidual: { pages: 0, chars: 0 } },
     warnings: [],
     _hashes: new Set(), // de-dupe pages with identical content, PER scan
     _siblings: new Map(), // siblingKey → [{sh, url}] of KEPT pages, for the mirror tier
@@ -313,6 +313,11 @@ export function crawlDocs(targets, options = {}) {
         scan.pages.push(page);
         const s = (page.meta && page.meta.strategy) || 'agent';
         scan.stats.strategyCounts[s] = (scan.stats.strategyCounts[s] || 0) + 1;
+        const residual = (page.meta && page.meta.revealResidualChars) || 0;
+        if (residual > 0) {
+          scan.stats.revealResidual.pages += 1;
+          scan.stats.revealResidual.chars += residual;
+        }
       }
       scan._resume = { visited, seeds: [...seeds], restored: scan.pages.length };
     }
@@ -320,7 +325,7 @@ export function crawlDocs(targets, options = {}) {
 
   const result = {
     scans,
-    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 } },
+    stats: { pages: 0, durationMs: 0, strategyCounts: emptyCounts(), tokens: emptyTokens(), deduped: { exact: 0, mirror: 0, near: 0 }, revealResidual: { pages: 0, chars: 0 } },
     warnings: [],
     run: null, // { id, dir, scans } once the run is saved to the cache
   };
@@ -444,6 +449,13 @@ export function crawlDocs(targets, options = {}) {
       scan.pages.push(page);
       const s = (page.meta && page.meta.strategy) || 'agent';
       scan.stats.strategyCounts[s] = (scan.stats.strategyCounts[s] || 0) + 1;
+      // #21d — accumulate the reveal exit audit: pages that ended with text
+      // still hidden, and how much. The per-page number lives in page.meta.
+      const residual = (page.meta && page.meta.revealResidualChars) || 0;
+      if (residual > 0) {
+        scan.stats.revealResidual.pages += 1;
+        scan.stats.revealResidual.chars += residual;
+      }
       // Incremental persistence (#13): the kept page hits the disk NOW, verbatim,
       // append-only — a crash from here on cannot lose it. No-op when saving is off.
       journal.append(scan.scanId, { page, links: extra.links || [] });
@@ -605,6 +617,8 @@ export function crawlDocs(targets, options = {}) {
         for (const [k, v] of Object.entries(s.stats.deduped)) {
           result.stats.deduped[k] = (result.stats.deduped[k] || 0) + v;
         }
+        result.stats.revealResidual.pages += s.stats.revealResidual.pages;
+        result.stats.revealResidual.chars += s.stats.revealResidual.chars;
       }
 
       // Persistence is opt-in. When the caller didn't ask to save (the library

@@ -469,7 +469,12 @@ export async function aiPlanNavigation({ llm, task, current = {}, controls = [] 
 
   const j = parseJson(ans);
   if (!j) return null; // signal: caller falls back to open-ended exploration
-  const dir = Number(j.direction);
+  // null-safe on purpose: Number(null) is 0, so a model answering the documented
+  // "no navigation" form {"direction": null} used to be misread as "direction =
+  // the first control" — which the reveal loop then RESERVED for a targeted walk
+  // that never ran, so that control was never clicked at all (found by the #21
+  // closed-loop tests; the schema explicitly allows null here).
+  const dir = j.direction == null ? NaN : Number(j.direction);
   const direction = Number.isInteger(dir) && dir >= 0 && dir < list.length ? dir : null;
   const target = typeof j.target === 'string' && j.target.trim() ? j.target.trim() : null;
   return { direction, target };

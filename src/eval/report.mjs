@@ -8,7 +8,7 @@
 //     expect: { revealContent?: string[], mustInclude?: string[],
 //               mustExclude?: string[], sitemapUrls?: string[] } }
 
-import { revealCoverage, sitemapCoverage, taskRespect, diffRuns, tokenBreakdown } from './metrics.mjs';
+import { revealCoverage, revealResidual, sitemapCoverage, taskRespect, diffRuns, tokenBreakdown } from './metrics.mjs';
 
 /** Concatenate a scan's output into one text blob to score against. Prefers the
  *  consolidated output files; falls back to the raw page Markdown. */
@@ -18,12 +18,13 @@ function scanText(scan) {
   return (scan.pages || []).map((p) => p.markdown || '').filter(Boolean).join('\n\n');
 }
 
-/** Every kept page across all scans, as { url, bytes } — for coverage + diff. */
+/** Every kept page across all scans, as { url, bytes, meta } — for coverage,
+ *  diff and the reveal-residual audit (#21d, reads meta.revealResidualChars). */
 function keptPages(result) {
   const out = [];
   for (const scan of result.scans || []) {
     for (const p of scan.pages || []) {
-      out.push({ url: p.url, bytes: (p.meta && p.meta.bytes) || 0 });
+      out.push({ url: p.url, bytes: (p.meta && p.meta.bytes) || 0, meta: p.meta });
     }
   }
   return out;
@@ -52,6 +53,7 @@ export function evaluate({ result, spec = {}, sitemapUrls = null, baselinePages 
     pages: pages.length,
     durationMs: (result.stats && result.stats.durationMs) || 0,
     reveal: expect.revealContent && expect.revealContent.length ? revealCoverage(text, expect.revealContent) : null,
+    residual: revealResidual(pages),
     task_respect:
       (expect.mustInclude && expect.mustInclude.length) || (expect.mustExclude && expect.mustExclude.length)
         ? taskRespect(text, expect)
@@ -85,6 +87,14 @@ export function formatReport(report) {
     const r = report.reveal;
     L.push(`(a) reveal completeness   ${bar(r.ratio)} ${pct(r.ratio)}  (${r.found}/${r.total} hidden snippets present)`);
     if (r.missing.length) for (const m of r.missing) L.push(`      MISSING: ${JSON.stringify(m.slice(0, 80))}`);
+  }
+
+  // (a)(iii) reveal residual — measured directly on the result, no golden set needed
+  if (report.residual && report.residual.pages) {
+    const r = report.residual;
+    const ratio = r.pages ? (r.pages - r.withResidual) / r.pages : 1;
+    L.push(`(a) reveal residual       ${bar(ratio)} ${pct(ratio)}  (${r.pages - r.withResidual}/${r.pages} pages fully drained · ~${r.words} words still hidden)`);
+    for (const w of r.worst) L.push(`      RESIDUAL: ${w.url} (~${Math.round(w.chars / 6)} words)`);
   }
 
   // (a)(ii) sitemap coverage

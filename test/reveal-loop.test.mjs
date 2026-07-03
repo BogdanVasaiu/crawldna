@@ -1,0 +1,268 @@
+// #21 b/c/d — the closed-loop reveal, offline: revealAll driven by a FAKE page
+// (settle/perceive/actions are all duck-typed over the page interface, so a
+// scripted state machine stands in for Playwright — no browser, no model, no
+// network beyond a local stub). What is proven here:
+//   (b) no-AI approves EVERY candidate, with the MEASURED ordering deciding who
+//       gets the budget first — the English DISCLOSURE_LABEL lexicon is no
+//       longer a gate (the "Servizi" bug: a listener-only control with a
+//       non-English label used to be skipped entirely);
+//   (b) a model "no" is overridden by a measured hidden payload — the judge's
+//       error becomes one extra click, never lost content;
+//   (c) a control that ADDS content and persists is re-clicked to saturation
+//       whatever its label's language — behaviour, not words;
+//   (d) the exit audit: the residual hidden text is returned, and a large one
+//       produces the advisory `reveal-residual` warning.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { revealAll, revealPriority, PAYLOAD_MIN } from '../src/engine/reveal.mjs';
+
+// --- the fake page ------------------------------------------------------------
+// Dispatches page.evaluate by what the evaluated function needs: perceive passes
+// args, captureHtml serializes outerHTML, settle polls innerText.length (made to
+// throw — settle treats a dead evaluate as "settled", its own tested fast path),
+// scrollStep reads scrollHeight.
+function makePage(model) {
+  return {
+    url: () => 'https://fake.site/page',
+    on() {},
+    off() {},
+    async waitForTimeout() {},
+    async goBack() {},
+    async goto() {},
+    locator: (sel) => {
+      const m = sel.match(/data-sagecrawl-id="(\d+)"/);
+      const id = m ? Number(m[1]) : -1;
+      return {
+        first: () => ({
+          scrollIntoViewIfNeeded: async () => {},
+          click: async () => model.click(id),
+        }),
+      };
+    },
+    async evaluate(fn, args) {
+      const src = fn.toString();
+      if (args && typeof args === 'object' && 'maxRevealers' in args) return model.perceive();
+      if (src.includes('outerHTML')) return model.html();
+      if (src.includes('innerText.length')) throw new Error('no DOM here');
+      if (src.includes('scrollBy')) return undefined;
+      if (src.includes('scrollHeight')) return model.scrollHeight();
+      return undefined;
+    },
+  };
+}
+
+const baseCtx = (llm, events) => ({
+  currentScan: {},
+  options: { llm, maxActions: 25 },
+  emit: (ev) => events.push(ev),
+  shouldStop: () => false,
+});
+
+const NONE = { provider: 'none', model: '', baseUrl: '', apiKey: '' };
+
+const rev = (id, over = {}) => ({
+  id,
+  kind: 'control',
+  label: `c${id}`,
+  role: 'button',
+  cls: '',
+  context: '',
+  heuristic: false,
+  signature: `sig-${id}`,
+  hiddenPayload: 0,
+  expanded: null,
+  ...over,
+});
+
+const pagePerception = (model, revealers) => ({
+  url: 'https://fake.site/page',
+  title: 'Fake',
+  mainText: model.paragraphs.join(' '),
+  revealers,
+  consentCandidates: [],
+  links: [],
+  hiddenResidualChars: model.residual || 0,
+  routes: [],
+  scrollHeight: model.scrollHeight(),
+});
+
+const htmlOf = (model) =>
+  `<html><head><title>Fake</title></head><body><main><h1>Fake</h1>${model.paragraphs
+    .map((p) => `<p>${p}</p>`)
+    .join('')}</main></body></html>`;
+
+// --- (b) unit: the measured ordering ------------------------------------------
+
+test('revealPriority: closed disclosure > measured payload > specific kind > label heuristic', () => {
+  const closed = rev(0, { expanded: 'false' });
+  const payload = rev(1, { hiddenPayload: 1900 });
+  const tab = rev(2, { kind: 'tab' });
+  const hinted = rev(3, { heuristic: true });
+  const generic = rev(4);
+  const order = [generic, hinted, tab, payload, closed].sort((a, b) => revealPriority(b) - revealPriority(a));
+  assert.deepEqual(order.map((c) => c.id), [0, 1, 2, 3, 4]);
+});
+
+// --- (c) behavioural load-more: language-free saturation ----------------------
+
+test('a control that ADDS content and persists is re-clicked to saturation — no English label needed', async () => {
+  const items = ['Alpha entry: the very first list row with enough text to stand as a block.'];
+  const MORE = [
+    'Bravo entry: the second row, revealed only by the first click on the loader.',
+    'Charlie entry: the third row, revealed by the second click on the loader.',
+    'Delta entry: the fourth and final row, after which the loader yields nothing.',
+  ];
+  let clicks = 0;
+  const model = {
+    paragraphs: items,
+    residual: 0,
+    scrollHeight: () => 800 + items.length * 400, // each row grows the page (append, not swap)
+    perceive() {
+      // 'Mehr anzeigen': kind stays 'control' (the English LOADMORE regex does
+      // not match), heuristic false — the OLD engine would never even click it.
+      return pagePerception(model, [rev(0, { label: 'Mehr anzeigen' })]);
+    },
+    html: () => htmlOf(model),
+    click(id) {
+      if (id !== 0) return;
+      clicks++;
+      if (MORE.length) items.push(MORE.shift());
+    },
+  };
+  const events = [];
+  const out = await revealAll(makePage(model), baseCtx(NONE, events), 'https://fake.site/page', 'estrai tutto');
+
+  for (const text of ['Alpha entry', 'Bravo entry', 'Charlie entry', 'Delta entry']) {
+    assert.ok(out.markdown.includes(text), `captured: ${text}`);
+  }
+  assert.ok(clicks >= 3, 'the loader was exhausted, not clicked once');
+  assert.ok(
+    events.some((e) => e.type === 'action' && /load more \(measured\)/.test(e.detail || '')),
+    'the behavioural repeat is announced as measured, not label-guessed',
+  );
+});
+
+// --- (b) no-AI: approve all, measured order decides the budget ----------------
+
+test('no-AI clicks a listener-only control with measured payload FIRST (the "Servizi" case)', async () => {
+  const model = {
+    paragraphs: ['Home intro: la pagina di partenza con il testo di benvenuto del comune.'],
+    residual: 0,
+    scrollHeight: () => 1000,
+    perceive() {
+      const list = [];
+      // A generic labelled div with a listener, no ARIA, no English disclosure
+      // words — but 900 chars measured behind it. Old no-AI verdict: skipped.
+      if (!model.serviziOpen) list.push(rev(1, { label: 'Servizi', hiddenPayload: 900 }));
+      list.push(rev(2, { label: 'Filtri' })); // plausible but nothing measured
+      return pagePerception(model, list);
+    },
+    html: () => htmlOf(model),
+    click(id) {
+      model.clicked = model.clicked || [];
+      model.clicked.push(id);
+      if (id === 1 && !model.serviziOpen) {
+        model.serviziOpen = true;
+        model.paragraphs.push('Servizi comunali: anagrafe, tributi, edilizia — il contenuto rivelato dal click.');
+      }
+    },
+  };
+  const events = [];
+  const out = await revealAll(makePage(model), baseCtx(NONE, events), 'https://fake.site/page', 'estrai i servizi');
+
+  assert.ok(out.markdown.includes('Servizi comunali'), 'the payload behind the listener-only control is captured');
+  assert.equal(model.clicked[0], 1, 'the measured payload outranks the generic sibling for the budget');
+  assert.ok(model.clicked.includes(2), 'no-AI approves every mechanical candidate (a wasted click beats lost content)');
+});
+
+// --- (b) AI mode: measurement arbitrates the judge ----------------------------
+
+let stubServer;
+let llm;
+before(async () => {
+  stubServer = http.createServer((req, res) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      const prompt = (() => {
+        try {
+          return JSON.parse(data).messages.at(-1).content;
+        } catch {
+          return '';
+        }
+      })();
+      // nav-plan asks for {"direction"...}; the reveal triage asks for {"click":[...]}.
+      const out = /"direction"/.test(prompt) ? '{"direction":null,"target":null}' : '{"click":[]}';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: out } }], usage: {} }));
+    });
+  });
+  await new Promise((r) => stubServer.listen(0, '127.0.0.1', r));
+  llm = { provider: 'openai', model: 'stub', baseUrl: `http://127.0.0.1:${stubServer.address().port}/v1`, apiKey: 'k' };
+});
+after(() => stubServer.close());
+
+test('an AI "no" is overridden by measured hidden payload; a payload-free "no" is honoured', async () => {
+  const model = {
+    paragraphs: ['Prodotti: il catalogo con la descrizione generale della gamma disponibile.'],
+    residual: 0,
+    scrollHeight: () => 1000,
+    perceive() {
+      const list = [];
+      if (!model.detOpen) list.push(rev(1, { label: 'Dettagli tecnici', hiddenPayload: PAYLOAD_MIN + 300 }));
+      list.push(rev(2, { label: 'Apri chat' })); // the model says no, nothing measured → stays rejected
+      return pagePerception(model, list);
+    },
+    html: () => htmlOf(model),
+    click(id) {
+      model.clicked = model.clicked || [];
+      model.clicked.push(id);
+      if (id === 1 && !model.detOpen) {
+        model.detOpen = true;
+        model.paragraphs.push('Scheda tecnica completa: dimensioni, peso, materiali e certificazioni.');
+      }
+    },
+  };
+  const events = [];
+  const out = await revealAll(makePage(model), baseCtx(llm, events), 'https://fake.site/page', 'estrai i prodotti');
+
+  assert.ok(out.markdown.includes('Scheda tecnica completa'), 'the measured payload was revealed despite the AI "no"');
+  assert.deepEqual(model.clicked, [1], 'the payload-free rejected control was never clicked — the judge still counts');
+});
+
+// --- (d) the exit audit --------------------------------------------------------
+
+test('a large hidden residual at exit is returned and warned about — advisory, never blocking', async () => {
+  const model = {
+    paragraphs: ['Visible intro text: the only thing any control can reach on this page.'],
+    residual: 3000, // ~500 words the reveal provably did NOT surface
+    scrollHeight: () => 1000,
+    perceive: () => pagePerception(model, []),
+    html: () => htmlOf(model),
+    click() {},
+  };
+  const events = [];
+  const out = await revealAll(makePage(model), baseCtx(NONE, events), 'https://fake.site/page', 'estrai tutto');
+
+  assert.equal(out.hiddenResidualChars, 3000, 'the audit number is machine-readable on the result');
+  const warn = events.find((e) => e.type === 'warn' && e.reason === 'reveal-residual');
+  assert.ok(warn, 'the residual produces the advisory warning');
+  assert.match(warn.message, /~500 words/, 'the warning carries the measured number');
+  assert.ok(out.markdown.includes('Visible intro text'), 'the page is still captured — advisory means advisory');
+});
+
+test('residual 0 stays silent — the measured all-clear', async () => {
+  const model = {
+    paragraphs: ['Fully visible page: nothing is hidden anywhere in the main content.'],
+    residual: 0,
+    scrollHeight: () => 1000,
+    perceive: () => pagePerception(model, []),
+    html: () => htmlOf(model),
+    click() {},
+  };
+  const events = [];
+  const out = await revealAll(makePage(model), baseCtx(NONE, events), 'https://fake.site/page', 'estrai tutto');
+  assert.equal(out.hiddenResidualChars, 0);
+  assert.ok(!events.some((e) => e.type === 'warn' && e.reason === 'reveal-residual'));
+});

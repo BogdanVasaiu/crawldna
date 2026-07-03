@@ -346,7 +346,11 @@ export async function crawlPageWithEngine(target, ctx) {
       title,
       markdown,
       blocks,
-      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown) },
+      // #21d — the reveal exit audit, per page and machine-readable: how many
+      // characters of text were STILL hidden in the main content when the
+      // reveal loop ended (0 = measured drain). Travels into the manifest and
+      // scan stats so completeness is a number, not a hope.
+      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown), revealResidualChars: revealed.hiddenResidualChars || 0 },
     },
     links: follow,
   };
