@@ -6,11 +6,11 @@ export type Provider = 'ollama' | 'openai';
 export type BrowserMode = 'never' | 'auto' | 'always';
 /**
  * What to extract — an explicit switch, never inferred from the task wording.
- * `"complete"`: everything reachable (completeness shortcuts tried first, pages kept
- * whole, zero AI link-gate/scoping calls). `"targeted"`: only what the task asks
- * (AI link gate + section scoping — requires AI, incompatible with `noAi`).
- * `"auto"` (default): legacy behaviour — a multilingual regex on the task picks the
- * docs path; kept for backward compatibility of existing callers and saved runs.
+ * `"complete"` (default): everything reachable (completeness shortcuts tried first,
+ * pages kept whole, zero AI link-gate/scoping calls). `"targeted"`: only what the
+ * task asks (AI link gate + section scoping — requires AI, incompatible with `noAi`).
+ * `"auto"`: legacy behaviour — a multilingual regex on the task picks the docs path;
+ * never the default (#23), kept only for saved runs and callers that name it.
  */
 export type CrawlMode = 'auto' | 'complete' | 'targeted';
 
@@ -50,12 +50,14 @@ export interface CrawlOptions {
    * Crawl with ZERO model calls (no model needed): reveal runs on DOM heuristics,
    * pages are kept whole, every in-scope link is followed. Zero tokens; the output
    * is not task-filtered and big sites can take longer — contain with `maxPages` /
-   * `include` / `exclude` / `minRelevance`. Incompatible with `mode: "targeted"`
+   * `include` / `exclude`. #23 — the task speaks only to the AI, so here it has NO
+   * role: an explicit `task` (or `minRelevance`, which reads it) is refused loudly,
+   * and output files are named from the site. Incompatible with `mode: "targeted"`
    * (task-filtering IS the model's job) — that combination is refused loudly.
    * Default `false`.
    */
   noAi?: boolean;
-  /** What to extract (see {@link CrawlMode}). Default `"auto"` (legacy behaviour). */
+  /** What to extract (see {@link CrawlMode}). Default `"complete"`. */
   mode?: CrawlMode;
   /** API base URL for `provider: "openai"` (e.g. `https://api.openai.com/v1`). */
   baseUrl?: string;

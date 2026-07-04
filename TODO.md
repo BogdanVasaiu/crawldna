@@ -111,6 +111,9 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 10 | Output per-documento identificabile + metadata (opzione) | fruibilità | Medio | ✅ fatto (2026-07-01) |
 | 11 | Reshape (Fase 2): fedeltà verificata | rispetto-task | Medio | ✅ fatto (2026-07-02) |
 | 12 | Harness di misurazione (completezza / rispetto-task / token) | trasversale — abilita tutto | Medio | ✅ fatto (2026-07-01, da verificare dal vivo) |
+| 24 | Fedeltà di layout dell'.md (varianti in posizione, link esterni, indentazione) | precisione output — leggibilità | Medio | ✅ fatto (2026-07-04) |
+| 25 | App incorporate: viste raggiunte (nav-in-main), budget protetto (futility guard), liste/tabelle leggibili | precisione reveal + leggibilità output | Medio | ✅ fatto (2026-07-04) |
+| 26 | Recupero heading per peso visivo (scheletro dell'.md, deterministico) | precisione output — struttura, abilita meglio il reshape | Medio | ☐ da fare |
 
 **Gruppo C — Affidabilità & operazioni** (dalla revisione ingegneristica 2026-07-02)
 
@@ -1436,6 +1439,241 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
+## #23 — No-AI: la task non ha NESSUN ruolo + default `mode: complete`
+**Effetto:** coerenza regola #6 (niente testo che pilota) · **Sforzo:** Basso · **Stato:** ✅ FATTO (2026-07-03)
+
+**Problema (feedback utente, 2026-07-03).** Con `--no-ai` la task faceva ancora tre
+cose: (a) ordinava i link lessicalmente (`scoreLink`), (b) dava il nome al file di
+output (`taskToName`), (c) senza `--mode` esplicito veniva letta dalla regex docs del
+legacy `auto`. Regola #6 portata in fondo: la task parla SOLO all'AI — se l'AI non
+c'è, la task non deve fare niente, nome del file compreso.
+
+**Implementato.**
+- **Core** ([src/index.mjs](src/index.mjs)): con `noAi`, una task esplicita
+  (opzione O per-target) è **rifiutata forte** (stesso stile di `targeted`+`noAi`);
+  idem `minRelevance > 0` (il suo punteggio È rilevanza-alla-task). La task di
+  default viene azzerata: niente ordinamento lessicale (task vuota → `scoreLink`
+  dà 1 a tutti = zero discriminazione), niente naming. I run **ripresi** (`__resume`)
+  sono esenti dal rifiuto (opzioni salvate prima del contratto): le loro task
+  vengono azzerate in silenzio.
+- **Naming dal sito** ([src/lib/layout.mjs](src/lib/layout.mjs)): scan senza task →
+  file e titolo derivati dall'host (`docs.example.com` → `docs-example-com.md`),
+  anche nell'index per-documento.
+- **Default `mode`: `'auto'` → `'complete'`.** Lo sniffing "documentazione" sparisce
+  dall'esperienza di default su OGNI superficie; `auto` resta solo per chi lo chiede
+  per nome (vecchi script) e per i run salvati/ripresi (che portano il loro mode).
+- **CLI** ([bin/cli.mjs](bin/cli.mjs)): help aggiornato (`--no-ai` non suggerisce più
+  `--min-relevance`; `--task` e `--min-relevance` dichiarano il rifiuto con no-AI).
+- **UI** ([ui/index.html](ui/index.html)): con "Crawl without AI" i campi task
+  (per-riga e shared), "Focus on task" ed "Embedding model" si spengono visibilmente
+  (title con il perché) e i loro valori residui NON vengono inviati; hint aggiornato.
+  Bonus: campo embedding con datalist dei modelli del provider (embed-named primi).
+
+**Criterio di accettazione.** `noAi`+task (opzione o target) → throw sincrono con
+messaggio chiaro; `noAi`+`minRelevance` → throw; `noAi` senza task → crawl ok, file
+nominato dall'host; resume di un run no-AI salvato con task → NON rifiutato, task
+inerte; default mode = complete (nessuna chiamata links/scope senza `--mode`).
+
+**File:** `src/index.mjs`, `src/lib/layout.mjs`, `bin/cli.mjs`, `ui/index.html`,
+`index.d.ts`, README, test.
+
+---
+
+## #24 — Fedeltà di layout dell'.md (varianti in posizione, link esterni, indentazione)
+**Effetto:** precisione output — leggibilità · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-04)
+
+**Problema (feedback utente, 2026-07-04, run Vuetify).** L'.md non rispecchiava il
+layout della pagina: (a) le varianti dei tab (pnpm/yarn/npm/bun) venivano catturate
+ma **appese in fondo al documento**, staccate dalla loro sezione, con marker
+`<!-- variant: … -->` invisibile nel rendering — "la cosa più importante non la fa";
+(b) la lista di link esterni (siti ufficiali dei package manager) veniva **cancellata**
+dal pruning per densità di link (#8), e la cascata di sicurezza non poteva vederlo
+perché `contentWordLen` ignora il testo dei link per design; (c) l'indentazione dei
+blocchi di codice (e delle liste annidate) veniva **schiacciata** da una regex globale
+`[ \t]{2,}→' '`; (d) la barra dei tab serializzava come testo spazzatura
+("pnpmyarnnpmbun"); (e) H1 doppio per pagina; (f) card pubblicitaria ("ads via …")
+nell'output.
+
+**Implementato (tutto universale, zero regole per-sito).**
+- **Merge ancorato** ([src/extract.mjs](src/extract.mjs) `BlockAccumulator.add`): un
+  blocco nuovo si inserisce PRIMA del blocco già noto che lo segue nello stato
+  catturato (la sua posizione nell'ordine di lettura di quello stato); solo il
+  contenuto veramente appeso (load-more) finisce in coda. Le varianti tab atterrano
+  accanto al fratello che sostituiscono: pnpm → yarn → npm → bun, nella sezione giusta.
+- **Marker visibile**: `**yarn:**` (l'etichetta del tab, in grassetto) al posto del
+  commento HTML che spariva in ogni rendering.
+- **Barra tab = chrome**: `[role=tablist]`/`[role=tab]` in `CHROME_SELECTORS` — i
+  PANNELLI (`role=tabpanel`) restano, l'etichetta sopravvive nel marker.
+- **Pruning site-aware** (`pruneNavByLinkDensity(content, host)`): la navigazione
+  naviga il SITO → un contenitore link-denso si prune solo se i link restano
+  overwhelmingly sull'host (relativi = interni); una lista che punta fuori sito è
+  riferimenti = contenuto. Senza `baseUrl` decide la sola densità (come prima).
+- **Cleanup fence-aware** (`cleanupLines`): gli spazi si collassano solo FRA le parole
+  e mai dentro i fence ``` — l'indentazione del codice e delle liste annidate è
+  struttura; righe orfane `[`/`]`/`!` da card rotte eliminate.
+- **Ad card senza classe stabile**: etichetta convenzione-Carbon "ads via <sponsor>"
+  (elemento corto, solo-label) → si rimuove la card cliccabile intera; la prosa che
+  MENZIONA gli ads sopravvive (bounded ≤30 char).
+- **Header per-pagina senza H1 doppio** ([src/lib/layout.mjs](src/lib/layout.mjs)):
+  se il corpo della pagina apre già con un `# `, il consolidato emette solo la riga
+  `_Source: url_`; il titolo strutturale resta per le pagine senza H1 proprio.
+
+**Verificato dal vivo** (run 20260704-002553 sulla stessa pagina Vuetify della
+segnalazione): lista pnpm/yarn/npm/bun presente, 4 varianti in posizione con marker
+visibili, indentazione intatta, zero junk tab-bar, zero ad, zero H1 doppi.
+193 test offline verdi.
+
+**File:** `src/extract.mjs`, `src/lib/layout.mjs`, test (`extract.test.mjs`,
+`layout.test.mjs`).
+
+---
+
+## #25 — App incorporate: viste raggiunte, budget protetto, liste/tabelle leggibili
+**Effetto:** precisione reveal + leggibilità output · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-04)
+
+**Problema (feedback utente, 2026-07-04, demo "Vuetify Gallery" sulla home).** (a) Le
+viste Analytics/Chat della demo non venivano MAI estratte: il drawer della demo è un
+`<nav>` (landmark) e la regola anti-chrome di perceive lo scartava — giusta per la
+navigazione del sito, sbagliata per la navigazione INTERNA di un'app dentro il
+contenuto. (b) Il budget azioni (40) si dissanguava su decine di righe-DATI con
+listener (card, righe tabella, chip — ripple framework), ognuna cliccata a effetto
+zero. (c) L'output era illeggibile: liste d'app frantumate un-campo-per-paragrafo,
+tabella GFM sfasciata dalle celle multi-linea, `!` orfani dagli avatar lazy-load che
+rompevano anche la dedup (tabella ripetuta 3×).
+
+**Implementato (tutto universale, misurato-non-giudicato).**
+- **perceive** ([src/engine/perceive.mjs](src/engine/perceive.mjs)): dentro un main
+  container REALE (≠ body), un landmark annidato appartiene al contenuto — un
+  CONTROLLO JS (listener sniffato, tag/ruolo interattivo, mai un `<a>`: resta link
+  per il gate) sopravvive al check chrome. Col fallback body la regola landmark resta
+  sovrana (lì il nav è davvero del sito).
+- **Futility guard** ([src/engine/reveal.mjs](src/engine/reveal.mjs)): controlli che
+  condividono la FORMA (role|kind|classe) vengono sondati; dopo `SHAPE_DEAD`=3 click
+  consecutivi senza alcun effetto (0 blocchi, fingerprint fermo, no navigazione) i
+  sosia restanti sono silenziati per la pagina (evento `skip` trasparente). Un solo
+  membro efficace riarma la forma (i giorni di calendario restano vivi). Costo max
+  per forma inutile: 3 click invece di N.
+- **Marker visibili estesi**: non solo i tab — anche control/dropdown con etichetta
+  corta (≤32) marcano i blocchi che il loro click ha aggiunto (`**Chat:**`,
+  `**Settings:**`, `**Security:**`…): si vede QUALE stato ha prodotto cosa.
+- **extract** ([src/extract.mjs](src/extract.mjs)): (1) liste ARIA
+  (`role=list/listitem`) → un item = un bullet; (2) righe ripetute SENZA ruolo
+  (≥3 div fratelli stessa classe base, testo breve, niente blocchi pesanti, mai
+  dentro td/th) → stesso trattamento — le transazioni diventano
+  `- JL John Leider 21 Mar 8:00PM +$36.11`; (3) celle di tabella GFM appiattite a
+  una riga (pipe escapati) — la tabella non si sfascia più; (4) lookbehind sul
+  cleanup permalink: `![](src)` non perde più il suo `[](src)` (niente `!` orfani);
+  (5) identità di dedup dei blocchi: ignora le immagini decorative alt-vuoto
+  (lazy-load ≠ blocco nuovo) e per le TABELLE ordina le righe nella sola CHIAVE —
+  il click su un header di sort non duplica più la tabella (il blocco salvato resta
+  verbatim, primo visto).
+
+**Verificato dal vivo** (run 20260704-092622, home vuetifyjs.com): Dashboard,
+Analytics (7D/30D/90D), Chat, e una vista Settings con tab Profile/Security/
+Notifications prima invisibili — tutte estratte, etichettate e leggibili; tabelle
+una sola volta; `skip muting 5 look-alike control(s)` in azione. 197 test verdi.
+
+**File:** `src/engine/perceive.mjs`, `src/engine/reveal.mjs`, `src/extract.mjs`,
+`test/extract.test.mjs`.
+
+---
+
+## #26 — Recupero heading per peso visivo (scheletro dell'.md, deterministico)
+**Effetto:** precisione output — struttura, abilita meglio il reshape · **Sforzo:** Medio · **Stato:** ✅ FATTO (2026-07-04)
+
+**Problema (discussione utente, 2026-07-04).** L'.md verbatim è ANCHE l'input del
+reshape: se la base è piatta, la Fase 2 eredita l'ambiguità. E la base è piatta non
+perché la pagina non avesse struttura, ma perché **la buttiamo via in Fase 1**. Le app
+marcano i titoli VISIVAMENTE, non semanticamente. Misurato dal vivo sul dashboard demo
+di vuetifyjs.com/en (probe `getComputedStyle`):
+
+| Titolo nel dashboard | Nel DOM | Nell'.md oggi |
+|---|---|---|
+| "Component Gallery" | `<h4>` 32px/700 | `#### Component Gallery` ✅ |
+| "Summary" / "Transactions" / "Recent Orders" | `<div class="v-card-title">` 22px/400 (font body = 16px) | testo piatto ❌ |
+
+Turndown si fida solo di `<h1>`–`<h6>`/`role=heading`, quindi ogni titolo di card/sezione
+marcato con font più grande diventa una riga anonima. Il dashboard perde lo scheletro.
+
+**La regola di confine (perché è Fase 1 e non reshape).** Struttura che ESISTEVA nella
+pagina (heading visivi, card, sezioni, liste, tabelle) = FEDELTÀ → Fase 1, deterministica,
+gratis, per tutti, anche `--no-ai`. Struttura che NON esisteva (dire "questi 4 numeri sono
+KPI", raggruppare per significato) = INVENZIONE → Fase 2/reshape, AI, opzionale, verificata.
+#26 sposta il confine dove deve stare: TUTTA la struttura recuperabile dal DOM va in Fase 1.
+Risolve entrambi i "ma" dell'utente: (1) non è opzionale → chi salta il reshape la ottiene
+comunque; (2) dà al reshape uno scheletro vero da cui partire.
+
+**Design proposto (universale, zero AI, misurato-non-giudicato).**
+- **DOVE**: al momento della cattura, in `perceive`/`captureHtml` (browser, dove
+  `getComputedStyle` è disponibile) — NON in Node (node-html-parser non ha gli stili
+  calcolati). Marca gli elementi heading-per-vista con un attributo
+  (`data-sagecrawl-heading="2|3"`) che `extract.mjs` poi converte in `##`/`###` con una
+  regola turndown, come già si fa per `data-sagecrawl-hidden`.
+- **SEGNALE (rapporto, mai una classe)**: un elemento è heading visivo se il suo testo è
+  CORTO (≤ ~60 char, una riga), NON dentro `<a>`/`<button>`/cella-tabella/codice, e ha un
+  SALTO netto rispetto al corpo attorno — `fontSize ≥ 1.15× del font body locale` OPPURE
+  (`fontWeight ≥ 600` E `fontSize ≥ body`). Il livello si mappa dal rapporto in bucket
+  (es. ≥1.8→h2, ≥1.35→h3, resto→h4), COERENTE con gli `<h*>` semantici già presenti (non
+  scavalcare: se un `<h2>` reale vale 32px, un card-title da 22px deve diventare h3/h4, non
+  h1). Considera di calcolare il "font body locale" dal testo di paragrafo più vicino, non
+  dal solo `body`, così un blocco tutto grande non promuove tutto.
+- **CONSERVATIVO (regola #1, asimmetria)**: meglio un heading di troppo che perdere lo
+  scheletro. Ma limitare i falsi positivi: escludere blocchi lunghi (paragrafi in grassetto,
+  pull-quote), elementi con molti figli di testo, e ciò che è già dentro liste/tabelle
+  (#25). Nessun contenuto viene MAI rimosso o riscritto: si aggiunge solo il livello `#`.
+- **INTERAZIONE con #24/#25**: gira PRIMA della conversione markdown; i marker di variante
+  (`**Chat:**`) e i bullet delle liste restano. Un card-title dentro una vista reveal
+  diventa un heading nella sezione di quella vista.
+
+**Criterio di accettazione.** Sul dashboard demo: "Summary"/"Transactions"/"Recent Orders"
+diventano heading (`##`/`###`) sopra il loro contenuto, SENZA scavalcare gli `<h4>` reali
+("Component Gallery"). Un paragrafo introduttivo in grassetto NON diventa heading. Zero
+contenuto perso (diff del testo non-heading invariato). Funziona identico in `--no-ai`
+(zero chiamate modello). Test offline in `test/extract.test.mjs` con HTML che porta gli
+stili inline (il path browser va verificato dal vivo con un probe, come #25).
+
+**Limite onesto (resta reshape).** Dove la pagina NON ha alcun titolo (4 card di statistiche
+senza etichetta di gruppo), la Fase 1 tiene il raggruppamento (bordo card, #25) ma non può
+inventare l'etichetta "KPI". Quell'ultimo miglio semantico è Fase 2.
+
+**Fatto (2026-07-04).** Come da design, con queste decisioni:
+- **DOVE**: `markVisualHeadings()` vive in `engine/perceive.mjs` (auto-contenuta) e viene
+  INLINED via `toString()` nell'evaluate di `captureHtml` (reveal.mjs) — stessa passata
+  atomica di `data-sagecrawl-hidden` (marca → serializza → smarca), evaluate in forma
+  STRINGA così non c'è eval annidato che una CSP possa bloccare. In più un GEMELLO Node in
+  `extract.mjs` applica le stesse regole agli stili INLINE: copre il path statico e rende
+  l'euristica testabile offline (i due gemelli vanno tenuti in sync, è scritto nei commenti).
+- **SEGNALE** (oltre la spec): testo ≤60 char con almeno UNA lettera (numeri/prezzi nudi
+  = dati, mai titoli — così "$44.99"/"42" delle stat card non diventano h2); blocco
+  non-inline (il wrapper `<div>` di uno `<span>` grande viene marcato lui); salto =
+  fontSize ≥1.15× il body LOCALE (dominante del testo circostante — un hero tutto-grande
+  non si auto-promuove) oppure bold ≥600 a fontSize ≥ body locale; mai sotto il font body
+  della PAGINA; blocchi a taglie miste esclusi (min ≥0.75×max: valore-stat + caption non è
+  un titolo); FRATELLI RIPETUTI stessa shape (tag + primo token di classe, ≥3 — lo stesso
+  segnale di shapedRowItem #25) esclusi: una riga di transazione col nome in bold non
+  diventa mai h4, resta bullet.
+- **LIVELLI / "coerente coi reali"**: rapporto vs body di pagina (≥1.8→h2, ≥1.35→h3,
+  resto h4), mai h1. "Non scavalcare" = i `<h*>` semantici non vengono MAI toccati o
+  ri-livellati (il `<h4>` da 32px resta `####`, non diventa `##`) e i visivi non prendono
+  mai h1 — NON una monotonia stretta di font vs ogni h* reale: sul caso reale (h4@32px)
+  quella avrebbe forzato i card-title da 22px a h5, perdendo proprio lo scheletro cercato.
+
+**Verificato dal vivo** (probe + run 20260704-100625, home vuetifyjs.com, `--no-ai`):
+"Summary"/"Transactions"/"Recent Orders" → `###` sopra le loro tabelle/bullet;
+`#### Component Gallery` e tutti gli h4 reali intoccati; i titoli delle card galleria
+("Misty Mountains"…) → h4 via bold-rule (titoli veri, conservativo nel verso giusto);
+bullet #25 e tabelle GFM invariati; passata di marcatura ~5ms. 207 test verdi (10 nuovi
+#26: card-title 22px→`###`, 30px→`##`, label bold→`####`, paragrafo bold lungo NO,
+dentro link/bottoni/liste/celle NO, hero NO, prezzi/stat-card NO, righe ripetute NO,
+marker browser→`##` senza stili, wrapper con span grande→`###`; e il diff del testo
+non-heading è byte-identico — regola #1).
+
+**File:** `src/engine/perceive.mjs` (marcatura in-browser), `src/engine/reveal.mjs`
+(inline atomico in captureHtml), `src/extract.mjs` (gemello Node + regola turndown),
+`test/extract.test.mjs`.
+
+---
+
 ## Riferimenti (ricerca)
 
 - Crawl4AI — Adaptive Crawling: https://docs.crawl4ai.com/core/adaptive-crawling/
@@ -1463,7 +1701,21 @@ del Reshape seleziona le sezioni giuste cross-lingua. Nessun link scartato di de
 
 ---
 
-_Ultimo aggiornamento: 2026-07-03 — sessione Gruppo D completata: #20 `mode`
+_Ultimo aggiornamento: 2026-07-04 — #26 recupero heading per peso visivo FATTO:
+i titoli che le app marcano solo VISIVAMENTE (card/sezioni con font più grande o
+bold, mai `<h*>`) diventano `##`/`###`/`####` deterministicamente — marcatura
+in-browser (computed styles, atomica con data-sagecrawl-hidden in captureHtml) +
+gemello Node sugli stili inline per il path statico, segnale a rapporto di font
+(mai una classe), h* reali mai toccati, zero chiamate modello (identico in
+`--no-ai`). Verificato dal vivo su vuetifyjs.com/en: "Summary"/"Transactions"/
+"Recent Orders" → `###`, `#### Component Gallery` intatto, bullet e tabelle #25
+invariati (207 test verdi). Prima, stesso giorno: #24 fedeltà di layout dell'.md
++ #25 app incorporate (feedback run Vuetify): merge ancorato delle varianti
+reveal (in posizione, marker visibili), pruning link-density site-aware, cleanup
+fence-aware, nav-in-main per le viste delle app (Analytics/Chat/Settings
+raggiunte), futility guard misurata sul budget, liste ARIA/shaped-row a bullet,
+tabelle GFM a riga singola con dedup order-insensitive (verificato dal vivo).
+In precedenza: 2026-07-03 — sessione Gruppo D completata: #20 `mode`
 esplicito, #21 reveal a ciclo chiuso, #22 tier embeddings e #14 politeness+anti-bot
 TUTTI FATTI (176 test offline verdi). La task non pilota più il motore, il reveal
 esce su una MISURA, il ranking è semantico/multilingua con `embedModel` (zero

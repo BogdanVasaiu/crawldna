@@ -1,13 +1,13 @@
 // #20 — the explicit `mode` option (complete / targeted / auto), fully offline
 // (local stub site + local OpenAI-compatible stub; no browser, no model, no
 // external network). The acceptance criteria from TODO.md:
-//   - complete: docs shortcuts always tried, pages kept WHOLE, ZERO link-gate
-//     calls even with AI on (works with noAi too);
+//   - complete (the DEFAULT since #23): docs shortcuts always tried, pages kept
+//     WHOLE, ZERO link-gate calls even with AI on (works with noAi too);
 //   - auto: identical to the historical behaviour (the task regex decides) —
-//     backward compatibility for library callers and saved/resumed runs;
+//     reachable only BY NAME (old scripts, saved/resumed runs), never the default;
 //   - targeted: the task-driven path regardless of the task's wording;
 //     targeted + noAi is refused loudly, never silently;
-//   - library contract: flat option, default unchanged, misuse fails fast.
+//   - library contract: flat option, misuse fails fast.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -158,7 +158,10 @@ test('targeted mode: the gate is consulted and its verdict honoured', async () =
   assert.ok(calls > 0, 'targeted mode consults the model');
 });
 
-test('auto mode (default): the gate runs exactly as before — regression guard', async () => {
+test('auto mode (engine-level fallback): the gate runs exactly as before — regression guard', async () => {
+  // A ctx WITHOUT a mode key resolves to 'auto' deep in the engine (saved runs,
+  // direct engine callers). crawlDocs itself now always sets an explicit mode,
+  // defaulting to 'complete' (#23) — that surface is covered below.
   calls = 0;
   const ctx = { currentScan: {}, options: { llm, minRelevance: 0 } }; // no mode set
   const keep = await decideFollow(ctx, 'Extract the full menu', links(3));
@@ -187,9 +190,14 @@ test('complete mode: the docs shortcuts are tried whatever the task — llms-ful
   assert.deepEqual(strategies, ['docs:llms-full'], 'a menu task still gets the completeness shortcut');
 });
 
-test('auto mode: the same non-docs task takes the general crawl (historical behaviour)', async () => {
-  const strategies = await strategiesFor('Extract the full menu', undefined);
+test('auto mode (asked for by name): the same non-docs task takes the general crawl', async () => {
+  const strategies = await strategiesFor('Extract the full menu', 'auto');
   assert.deepEqual(strategies, ['agent'], 'auto + non-docs task never touches the docs shortcuts');
+});
+
+test('no mode passed: the default is complete (#23) — the task wording changes nothing', async () => {
+  const strategies = await strategiesFor('Extract the full menu', undefined);
+  assert.deepEqual(strategies, ['docs:llms-full'], 'the default no longer sniffs the task');
 });
 
 test('targeted mode: a docs-sounding task no longer flips to the docs profile', async () => {

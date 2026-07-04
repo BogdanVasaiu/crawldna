@@ -30,6 +30,13 @@ function taskToName(task) {
   return words.join('-') || 'content';
 }
 
+/** #23 — a task-less scan (noAi: the task has no role, naming included) is named
+ *  from its SITE instead. */
+function siteName(url) {
+  const host = hostOf(url || '');
+  return host ? host.replace(/^www\./, '') : '';
+}
+
 function deriveTitle(filename) {
   return filename
     .replace(/\.md$/i, '')
@@ -73,14 +80,22 @@ export function assembleScan({ task, pages }) {
       seen.add(p.url);
       sources.push(p.url);
     }
+    // Structural per-page header (multi-page scans): provenance must be clear and
+    // Phase 2 must be able to address pages. When the page's own content already
+    // OPENS with an H1 (most pages), repeating the <title>-derived name above it
+    // would print two near-identical top headings back to back — the source line
+    // alone identifies the page and the content keeps its own skeleton.
+    const body = p.markdown.trim();
+    const hasOwnH1 = /^#\s/.test(body);
     const header = multi
-      ? `# ${(p.title || p.url || 'Page').trim()}\n\n_Source: ${p.url || ''}_\n\n`
+      ? (hasOwnH1 ? '' : `# ${(p.title || p.url || 'Page').trim()}\n\n`) + `_Source: ${p.url || ''}_\n\n`
       : '';
-    parts.push(header + p.markdown.trim());
+    parts.push(header + body);
   }
 
   const body = parts.join(multi ? '\n\n---\n\n' : '\n\n').trim();
-  const filename = sanitizeName(taskToName(task));
+  const named = String(task || '').trim() ? taskToName(task) : siteName(all[0].url);
+  const filename = sanitizeName(named);
   const markdown = frontMatter({ task, sources, generatedAt }) + body + '\n';
 
   return [
@@ -122,9 +137,11 @@ export function extractHeadings(markdown) {
   return out;
 }
 
-/** A stable, human-readable title for the crawl index, derived from the task. */
-function taskToTitle(task) {
-  return deriveTitle(sanitizeName(taskToName(task)));
+/** A stable, human-readable title for the crawl index — from the task, or from the
+ *  site when there is no task (#23, noAi). */
+function taskToTitle(task, fallbackUrl) {
+  const named = String(task || '').trim() ? taskToName(task) : siteName(fallbackUrl);
+  return deriveTitle(sanitizeName(named));
 }
 
 /** Minimal self-describing front-matter for a per-document .md file. */
@@ -191,7 +208,7 @@ export function assemblePerDocument({ task, pages }) {
   }
 
   const indexLines = [
-    `# ${taskToTitle(task)}`,
+    `# ${taskToTitle(task, all[0].url)}`,
     '',
     `_${documents.length} document(s) · generated ${new Date().toISOString()}_`,
     '',

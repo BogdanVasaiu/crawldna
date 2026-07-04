@@ -11,6 +11,7 @@ test('DEFAULT_OPTIONS: library-safe, precision-first defaults', () => {
   assert.equal(DEFAULT_OPTIONS.save, false, 'a library writes NOTHING unless asked');
   assert.equal(DEFAULT_OPTIONS.perDocument, false);
   assert.equal(DEFAULT_OPTIONS.minRelevance, 0, 'focused mode is opt-in');
+  assert.equal(DEFAULT_OPTIONS.mode, 'complete', '#23 — the default never sniffs the task');
   assert.equal(DEFAULT_OPTIONS.nearDupHamming, 0, 'cross-path near-dup collapse is opt-in');
   assert.equal(DEFAULT_OPTIONS.mirrorHamming, 8, 'mirror/variant dedup is on by default (URL+content two-signal gate)');
   assert.equal(DEFAULT_OPTIONS.maxPages, 0, 'unlimited by default');

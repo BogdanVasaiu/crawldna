@@ -73,9 +73,12 @@ above and run `npm run serve` (see [Web UI](#web-ui)).
   accordions and "load more" (picked by DOM heuristics), but zero model calls are
   made. Zero tokens, no model needed; the trade-off is that nothing is task-filtered —
   pages are kept whole and **every in-scope link is followed**, so on a big site the
-  crawl can grow (the AI link gate is what normally keeps it small). Contain it with
-  `--max-pages`, `--include`/`--exclude` or `--min-relevance`. Reshape (Phase 2) is
-  chat with a model, so it still needs one.
+  crawl can grow (the AI link gate is what normally keeps it small). The task speaks
+  only to the AI, so without AI it has **no role**: `--task` (and `--min-relevance`,
+  which reads it) is refused loudly, and output files are named from the site. Contain
+  the crawl with `--max-pages` or `--include`/`--exclude`. Reshape (Phase 2) is chat
+  with a model, so it still needs one — a `--no-ai` run can be reshaped later by
+  enabling a model then.
 - **[Playwright](https://playwright.dev) Chromium** — needed for crawls that take
   actions / reveal hidden content (the engine). Pure structured or static extraction
   (e.g. a docs site exposing `llms-full.txt` or a sitemap) runs **without** it.
@@ -218,8 +221,8 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `model` | — (**required** unless `noAi`) | model id — Ollama (e.g. `"qwen3-coder:30b"`) or OpenAI-compatible (e.g. `"gpt-4o-mini"`) |
 | `provider` | `"ollama"` | `"ollama"` (local) \| `"openai"` (any OpenAI-compatible API) |
 | `embedModel` | — | **optional** embedding model from the same provider (e.g. `"nomic-embed-text"` on Ollama, `"text-embedding-3-small"` on OpenAI). Task→link relevance becomes **semantic** — multilingual, synonym-aware ("estrai i prezzi" ranks a German site's *Preise* pages first) — feeding the best-first frontier, `maxRoutes`, the opt-in `minRelevance` and reshape's context retrieval. Orders only, never drops by itself; unset = lexical scoring; unreachable = one loud warning, lexical floor. Ignored with `noAi` |
-| `noAi` | `false` | crawl with **zero model calls** (no model needed): reveal runs on DOM heuristics, pages are kept whole, every in-scope link is followed. Zero tokens; output is not task-filtered and big sites can take longer — contain with `maxPages`/`include`/`exclude`/`minRelevance`. Incompatible with `mode: "targeted"` (refused loudly) |
-| `mode` | `"auto"` | **what to extract, as an explicit switch** — the task wording never flips engine behaviour. `"complete"`: everything reachable — completeness shortcuts (`llms-full.txt`/sitemap) tried first, pages kept **whole**, and **zero AI link-gate/scoping calls** even with AI on (the default-on mirror dedup keeps follow-everything contained; AI still drives reveal + nav-plan). Works with `noAi`. `"targeted"`: only what the task asks — AI link gate + per-page section scoping, in any language (**needs AI**). `"auto"` (default): legacy — a multilingual regex on the task picks the docs path; kept for backward compatibility of existing callers and saved/resumed runs. The UI always sends an explicit mode |
+| `noAi` | `false` | crawl with **zero model calls** (no model needed): reveal runs on DOM heuristics, pages are kept whole, every in-scope link is followed. Zero tokens; output is not task-filtered and big sites can take longer — contain with `maxPages`/`include`/`exclude`. The task has **no role** here (it speaks only to the AI): an explicit `task` — or `minRelevance`, which reads it — is refused loudly, and files are named from the site. Incompatible with `mode: "targeted"` (refused loudly) |
+| `mode` | `"complete"` | **what to extract, as an explicit switch** — the task wording never flips engine behaviour. `"complete"` (default): everything reachable — completeness shortcuts (`llms-full.txt`/sitemap) tried first, pages kept **whole**, and **zero AI link-gate/scoping calls** even with AI on (the default-on mirror dedup keeps follow-everything contained; AI still drives reveal + nav-plan). Works with `noAi`. `"targeted"`: only what the task asks — AI link gate + per-page section scoping, in any language (**needs AI**). `"auto"`: legacy — a multilingual regex on the task picks the docs path; never the default, kept only for old saved runs and callers that name it |
 | `baseUrl` | — | API base URL for `provider: "openai"` |
 | `apiKey` | — | API key for `provider: "openai"` (falls back to `SAGECRAWL_API_KEY` / `OPENAI_API_KEY`) |
 | `ollamaHost` | `127.0.0.1:11434` | override the Ollama server |

@@ -38,6 +38,19 @@ test('assembleScan: one consolidated file, task-derived name, front-matter, verb
   assert.equal(f.bytes, Buffer.byteLength(f.markdown, 'utf8'));
 });
 
+test('assembleScan: no duplicate H1 when the page content opens with its own', () => {
+  const files = assembleScan({ task: 'Extract docs', pages });
+  const md = files[0].markdown;
+  // pages[0] opens with "# Intro": the header must NOT stack a second title on it,
+  // but the source line still identifies the page for Phase 2.
+  assert.equal(md.match(/^# Intro$/gm).length, 1, 'the content H1 appears once, not doubled by the header');
+  assert.ok(md.includes('_Source: https://ex.com/docs/intro_'));
+  // a page WITHOUT its own H1 still gets the title header for addressability
+  const noH1 = [pages[0], { url: 'https://ex.com/docs/bare', title: 'Bare', markdown: 'Just prose.' }];
+  const md2 = assembleScan({ task: 'Extract docs', pages: noH1 })[0].markdown;
+  assert.ok(md2.includes('# Bare\n\n_Source: https://ex.com/docs/bare_'));
+});
+
 test('assembleScan: single page gets no per-page header', () => {
   const files = assembleScan({ task: 'x', pages: [pages[0]] });
   assert.ok(!files[0].markdown.includes('_Source:'));

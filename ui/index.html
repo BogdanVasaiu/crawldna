@@ -203,6 +203,11 @@
   .run .when { color:var(--t4); font-family:var(--mono); font-size:10.5px; white-space:nowrap;
                flex:0 1 auto; min-width:0; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
   .run button.danger { padding:4px 10px; font-size:13px; flex-shrink:0; }
+  /* #13 — an interrupted run (crash or Stop) offers to complete itself */
+  .run button.resume { padding:4px 10px; font-size:13px; flex-shrink:0; color:var(--a);
+                       border-color:var(--a-border); }
+  .run button.resume:hover { box-shadow:0 0 12px var(--a-glow); transform:none; }
+  .run .sub .st-resumable { color:var(--amb); }
 
   /* ===================== step 2: run / view ===================== */
   .runview { display:flex; flex-direction:column; height:calc(100vh - 56px); }
@@ -268,9 +273,12 @@
      green = verbatim crawl output · violet = AI-reshaped files (from the chat).
      The same colour language is used on the chat chips and the viewer badge, so
      "which document am I looking at?" always has one obvious answer. */
-  .files { display:flex; gap:3px; flex-wrap:wrap; align-items:center; flex-shrink:0; min-width:0;
+  .files { display:flex; gap:3px; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin;
+           align-items:center; flex-shrink:0; min-width:0;
            margin:14px 24px 0; padding:6px; background:var(--s3); border:1px solid var(--b2); border-radius:var(--r); }
-  .files .label { color:var(--t4); font-size:9px; text-transform:uppercase; letter-spacing:.09em; margin:0 8px 0 5px; font-weight:600; }
+  .files .label { color:var(--t4); font-size:9px; text-transform:uppercase; letter-spacing:.09em; margin:0 8px 0 5px; font-weight:600; flex-shrink:0; }
+  .files .divider { flex-shrink:0; }
+  .files .chip { flex-shrink:0; }
   .files .label.rs-label { color:var(--man); opacity:.75; }
   .files .divider { width:1px; align-self:stretch; margin:2px 6px; background:var(--b2); }
   .files .chip { padding:7px 14px; border:none; border-radius:var(--r-sm); background:transparent; cursor:pointer;
@@ -282,6 +290,30 @@
   .files .chip.rs:hover { color:#a5b4fc; }
   .files .chip.rs.active { color:var(--man); background:var(--s5); font-weight:600; box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px rgba(129,140,248,.35); }
   .files .chip .chip-warn { color:var(--amb); margin-left:5px; }
+  /* the files-bar toggle for the reshaped-documents drawer (violet identity) */
+  .files .chip.rs-toggle { color:var(--man); }
+  .files .chip.rs-toggle:hover { color:#a5b4fc; background:rgba(129,140,248,.07); }
+  .files .chip.rs-toggle.open { color:var(--man); background:var(--s5); font-weight:600;
+                                box-shadow:0 1px 4px rgba(0,0,0,.6), 0 0 0 1px rgba(129,140,248,.35); }
+
+  /* reshaped documents live in a DRAWER under the bar, not in the bar: they can
+     grow with every chat turn while the bar must stay one scrollable line */
+  .rs-drawer { flex-shrink:0; margin:8px 24px 0; padding:8px 10px; background:var(--s2);
+               border:1px solid rgba(129,140,248,.28); border-radius:var(--r); animation:extIn .18s ease; }
+  .rsd-head { display:flex; align-items:center; gap:8px; padding:2px 4px 8px; }
+  .rsd-title { color:var(--man); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
+  .rsd-count { color:var(--t4); font-family:var(--mono); font-size:10px; }
+  .rsd-close { margin-left:auto; padding:2px 10px; font-size:10px; color:var(--t3); }
+  .rsd-close:hover { color:var(--man); transform:none; }
+  .rsd-list { display:flex; flex-direction:column; gap:2px; max-height:180px; overflow:auto; scrollbar-width:thin; }
+  .rsd-item { display:flex; align-items:center; gap:9px; padding:6px 9px; border:none; border-radius:var(--r-sm);
+              background:transparent; color:var(--t3); font-family:var(--mono); font-size:11px; cursor:pointer;
+              text-align:left; transition:all .15s; min-width:0; width:100%; }
+  .rsd-item:hover { color:#a5b4fc; background:rgba(129,140,248,.07); transform:none; }
+  .rsd-item.active { color:var(--man); background:var(--s5); box-shadow:0 0 0 1px rgba(129,140,248,.35); }
+  .rsd-item .rsd-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rsd-item .rsd-meta { margin-left:auto; flex-shrink:0; color:var(--t4); font-size:10px; }
+  .rsd-item .rsd-warn { color:var(--amb); flex-shrink:0; }
 
   /* which document is open — a slim identity bar the viewer can never lose */
   .doc-head { display:flex; align-items:center; gap:9px; flex-shrink:0; min-width:0;
@@ -309,9 +341,16 @@
   .ext { padding:20px 0; border-bottom:1px solid var(--b1); animation:extIn .35s ease; }
   .ext:first-child { padding-top:6px; }
   .ext:last-child { border-bottom:none; }
-  .ext-src { display:flex; align-items:baseline; gap:10px; margin-bottom:12px; }
-  .ext-title { font-size:12px; font-weight:600; color:var(--t2); white-space:nowrap; flex-shrink:0; }
-  .ext-url { font-family:var(--mono); font-size:10.5px; color:var(--t4);
+  /* the header of each live extraction: STICKY while its block scrolls, with a
+     SOLID card behind it — the page text slides underneath, never through it */
+  .ext-src { position:sticky; top:0; z-index:6; display:flex; align-items:center; gap:10px;
+             margin-bottom:12px; padding:8px 12px; background:var(--s2);
+             border:1px solid var(--b2); border-radius:var(--r-sm);
+             box-shadow:0 4px 14px rgba(0,0,0,.45); }
+  .ext-src::before { content:'✓'; color:var(--a); font-size:10.5px; font-weight:700; flex-shrink:0; }
+  .ext-title { font-size:12.5px; font-weight:700; color:var(--t1); white-space:nowrap; flex-shrink:0;
+               overflow:hidden; text-overflow:ellipsis; max-width:45%; }
+  .ext-url { font-family:var(--mono); font-size:10.5px; color:var(--t3);
              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ext .md-body { margin:0; max-width:none; }
   .ext .md-body figure.md-figure img { max-height:220px; }
@@ -320,6 +359,8 @@
 
   /* shared task hides per-row task inputs (one task for all links) */
   #rows.shared .row .task { display:none; }
+  /* #23 — no-AI hides them too: the task has no role without a model */
+  #rows.no-ai .row .task { display:none; }
 
   /* ===================== rendered markdown ===================== */
   .md-body { max-width:820px; margin:0 auto; font-size:13.5px; line-height:1.72; color:var(--t2); }
@@ -499,16 +540,19 @@
     .row { flex-wrap:wrap; }
     .row input.url { flex:1 1 100%; }
     .row input.task { flex:1 1 0; min-width:0; }
-    #rows.shared .row input.url { flex:1 1 0; min-width:0; }
+    #rows.shared .row input.url, #rows.no-ai .row input.url { flex:1 1 0; min-width:0; }
     .actions .primary { width:100%; padding:13px 20px; }
     .run .when { display:none; }  /* the URL column: redundant with the title on a phone */
 
     /* run view: main on top, panel below — both usable */
     .runview { height:auto; min-height:calc(100dvh - 50px); }
     .run-body { grid-template-columns:1fr; grid-template-rows:minmax(46dvh, auto) auto; }
-    .run-main { min-height:46dvh; }
+    .run-main { min-height:46dvh; overflow:visible; }
     .side { border-left:none; border-top:2px solid var(--b2); min-height:52dvh; }
-    .viewer { padding:16px 14px 36px; }
+    /* here the PAGE scrolls (runview is auto-height): the viewer must not be a
+       scroll container or the sticky .ext-src would bind to it and never stick */
+    .viewer { padding:16px 14px 36px; overflow:visible; }
+    .ext-src { top:50px; } /* stick just below the sticky topbar */
     .ctx, .files, .doc-head { margin-left:14px; margin-right:14px; }
     .stats { width:100%; justify-content:space-between; }
     .stat { padding:0 6px; text-align:left; }
@@ -541,7 +585,22 @@
       sagecrawl opens each page in a real browser, reveals hidden content (tabs, accordions, “load more”),
       and keeps only what your task asks for — <b>verbatim</b>. Turning it into tables, splits or filtered
       subsets comes later, in <b>Reshape</b>.</p>
-    <div class="chk">
+
+    <!-- #23 — the first choice comes first: no-AI excludes everything task-related
+         below it (task boxes, "What to extract", focus/embedding), so it sits on top. -->
+    <div class="chk" style="margin:0 0 6px">
+      <input type="checkbox" id="noAi" />
+      <label for="noAi">Crawl without AI <span style="color:var(--t4)">— zero tokens, no model needed</span></label>
+    </div>
+    <p class="hint" id="noAiHint" style="display:none; margin:0 0 12px">
+      Classic crawl <b>plus the reveal engine</b> (tabs, accordions, “load more” are still
+      clicked, picked by heuristics). <b>The task has no role here</b> — it speaks to the AI,
+      and there is none: the task boxes disappear and files are named from the site. Pages are
+      kept whole and <b>every in-scope link is followed</b> — on a big site that can mean
+      <i>more</i> pages and time, not less. Contain it with Max pages or Include/Exclude.
+    </p>
+
+    <div class="chk" id="sharedChk">
       <input type="checkbox" id="sharedToggle" />
       <label for="sharedToggle">Apply one shared task to all links</label>
     </div>
@@ -550,31 +609,23 @@
       <input id="sharedTask" placeholder="Extract all documentation" />
     </div>
 
-    <label>Links &amp; tasks</label>
+    <label id="rowsLabel">Links &amp; tasks</label>
     <div id="rows"></div>
     <button id="addRow">+ add link</button>
 
     <div class="opts">
       <!-- #20 — WHAT to extract is an explicit switch, never guessed from the task
            wording. The UI always sends one of the two real modes ('auto' is the
-           library-only backward-compat value). -->
-      <label>What to extract</label>
-      <div class="seg" id="mode-seg" style="margin-bottom:6px">
-        <button type="button" class="seg-btn active" data-mode="complete">Everything · the whole site</button>
-        <button type="button" class="seg-btn" data-mode="targeted" id="mode-targeted">Only what the task asks</button>
+           library-only backward-compat value). Under no-AI (#23) it stays visible,
+           locked on 'Everything': that IS what a no-model crawl does. -->
+      <div id="modeWrap">
+        <label>What to extract</label>
+        <div class="seg" id="mode-seg" style="margin-bottom:6px">
+          <button type="button" class="seg-btn active" data-mode="complete">Everything · the whole site</button>
+          <button type="button" class="seg-btn" data-mode="targeted" id="mode-targeted">Only what the task asks</button>
+        </div>
+        <p class="hint" id="modeHint" style="margin:0 0 14px"></p>
       </div>
-      <p class="hint" id="modeHint" style="margin:0 0 14px"></p>
-
-      <div class="chk" style="margin:0 0 6px">
-        <input type="checkbox" id="noAi" />
-        <label for="noAi">Crawl without AI <span style="color:var(--t4)">— zero tokens, no model needed</span></label>
-      </div>
-      <p class="hint" id="noAiHint" style="display:none; margin:0 0 12px">
-        Classic crawl <b>plus the reveal engine</b> (tabs, accordions, “load more” are still
-        clicked, picked by heuristics). Nothing is task-filtered: pages are kept whole and
-        <b>every in-scope link is followed</b> — on a big site that can mean <i>more</i> pages
-        and time, not less. Contain it with Max pages, Include/Exclude or Focus on task.
-      </p>
       <div id="aiSetup">
       <label>AI provider</label>
       <div class="seg" id="provider-seg">
@@ -664,10 +715,16 @@
             </div>
             <div><label>Concurrency</label><input id="concurrency" type="number" value="4" min="1" /></div>
             <div><label>Max pages (0=∞)</label><input id="maxPages" type="number" value="0" min="0" /></div>
-            <div><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
+            <div id="minRelCell"><label>Focus on task (0=off)</label><input id="minRelevance" type="number" value="0" min="0" max="1" step="0.1" /></div>
             <div><label>Include (regex)</label><input id="include" placeholder="optional" /></div>
             <div><label>Exclude (regex)</label><input id="exclude" placeholder="optional" /></div>
-            <div><label>Embedding model (optional)</label><input id="embedModel" placeholder="e.g. nomic-embed-text" /></div>
+            <div id="embedCell"><label>Embedding model (optional)</label>
+              <!-- Ollama: the installed models are known → a real select (none =
+                   plain word-matching). API: free-typed id + fetched autocomplete. -->
+              <select id="embedModelSelect"></select>
+              <input id="embedModel" list="embedModelList" class="hidden" placeholder="e.g. text-embedding-3-small" />
+              <datalist id="embedModelList"></datalist>
+            </div>
             <div><label>Delay per host, ms (0=off)</label><input id="delay" type="number" value="0" min="0" step="50" /></div>
             <div class="chk" style="align-self:end; margin:0 0 10px">
               <input type="checkbox" id="respectRobots" />
@@ -706,8 +763,8 @@
               or <code>text-embedding-3-small</code> on OpenAI). Makes the task→link relevance
               <b>semantic</b>: a task in one language ranks pages in another, and synonyms count.
               It only <b>orders</b> (and feeds “Focus on task” if you raise it) — it never drops
-              a page by itself. Leave empty for the plain word-matching scorer.
-              Ignored when “Crawl without AI” is on.</dd>
+              a page by itself. Leave it on “none” for the plain word-matching scorer.
+              Hidden with “Crawl without AI”: embeddings are model calls too.</dd>
           </dl>
           <p class="og-foot">
             <b>Regex examples:</b> Include <code>/docs/</code> stays in that section ·
@@ -771,7 +828,7 @@
         <div class="bar" id="run-bar"><i id="run-bar-i"></i></div>
         <span class="runtop-prog" id="run-prog"></span>
       </div>
-      <button class="danger hidden" id="stop">Stop</button>
+      <button class="danger hidden" id="stop" title="Stops gracefully — everything captured so far is saved, and the run can be resumed from History">Stop</button>
     </div>
   </div>
 
@@ -780,6 +837,16 @@
     <div class="run-main">
       <div class="ctx" id="run-ctx"></div>
       <div class="files" id="run-files"><span class="label">files</span><span class="muted">no files yet</span></div>
+      <!-- reshaped documents: a drawer opened from the bar's violet toggle — one
+           row per document, with the fidelity ⚠ and an arrow to close -->
+      <div class="rs-drawer hidden" id="rs-drawer">
+        <div class="rsd-head">
+          <span class="rsd-title">▤ reshaped documents</span>
+          <span class="rsd-count" id="rsd-count"></span>
+          <button type="button" class="ghost rsd-close" id="rsd-close" title="Close the drawer">▲ close</button>
+        </div>
+        <div class="rsd-list" id="rsd-list"></div>
+      </div>
       <!-- identity of the OPEN document: name · origin badge (crawl/reshape) · size.
            Without it, opening a reshape file from the chat silently swapped the viewer
            while the crawl file's tab still looked active — impossible to tell apart. -->
@@ -978,13 +1045,16 @@ $('sharedToggle').onchange = (e) => {
 };
 
 function collectTargets() {
+  // #23 — with "Crawl without AI" the task has no role: leftover text in the (now
+  // disabled) task boxes is never sent, so the core's loud refusal can't misfire.
+  const noAi = $('noAi').checked;
   const shared = $('sharedToggle').checked ? ($('sharedTask').value.trim() || undefined) : null;
   const targets = [];
   for (const row of rowsEl.querySelectorAll('.row')) {
     const url = row.querySelector('.url').value.trim();
     if (!url) continue;
     const rowTask = row.querySelector('.task').value.trim();
-    const task = shared != null ? shared : (rowTask || undefined);
+    const task = noAi ? undefined : (shared != null ? shared : (rowTask || undefined));
     targets.push(task ? { url, task } : { url });
   }
   return targets;
@@ -1009,12 +1079,14 @@ function collectOptions() {
   }
   if ($('include').value.trim()) o.include = $('include').value.trim();
   if ($('exclude').value.trim()) o.exclude = $('exclude').value.trim();
+  // #23 — minRelevance reads the task, and under noAi the task has no role: the
+  // field is disabled and its leftover value is never sent (the core refuses it).
   const mr = Number($('minRelevance').value) || 0;
-  if (mr > 0) o.minRelevance = mr;
-  // #22 — optional semantic relevance tier. The core ignores it under noAi
-  // (provider 'none' carries no embedModel — zero model calls of any kind).
-  const em = $('embedModel').value.trim();
-  if (em) o.embedModel = em;
+  if (mr > 0 && !o.noAi) o.minRelevance = mr;
+  // #22 — optional semantic relevance tier. Never sent under noAi (zero model
+  // calls of any kind — embeddings included). Ollama reads the select, API the input.
+  const em = (provider === 'ollama' ? $('embedModelSelect').value : $('embedModel').value).trim();
+  if (em && !o.noAi) o.embedModel = em;
   try { localStorage.setItem('sagecrawl.embedModel', em); } catch {}
   // #14 — politeness, opt-in
   const dly = Number($('delay').value) || 0;
@@ -1120,7 +1192,36 @@ function populateApiModels() {
 function refreshPicker() {
   if (provider === 'openai') populateApiModels();
   else populateModels();
+  populateEmbedModels();
 }
+
+// The embedding model comes from the SAME provider list as the main model. Ollama:
+// the installed models are known, so a real <select> ("none" = plain word-matching),
+// embedding-named ones first. API: free-typed id with the fetched list as
+// autocomplete (the naming test is a hint for ordering, never a rule).
+const EMBED_NAME_RE = /embed|bge|nomic|mxbai|arctic|e5|minilm/i;
+function populateEmbedModels() {
+  let saved = '';
+  try { saved = (localStorage.getItem('sagecrawl.embedModel') || '').trim(); } catch {}
+  const ranked = [...availableModels].sort(
+    (a, b) => Number(EMBED_NAME_RE.test(b.name)) - Number(EMBED_NAME_RE.test(a.name)));
+  const sel = $('embedModelSelect');
+  const current = sel.value || saved;
+  sel.innerHTML = '<option value="">— none · plain word-matching —</option>' + ranked
+    .map((m) => '<option value="' + escAttr(m.name) + '">' + esc(m.name) + '</option>').join('');
+  // A remembered model that is no longer installed stays selectable (and visible),
+  // rather than being silently forgotten.
+  if (current && ![...sel.options].some((o) => o.value === current)) {
+    sel.insertAdjacentHTML('beforeend', '<option value="' + escAttr(current) + '">' + esc(current) + '</option>');
+  }
+  sel.value = current || '';
+  $('embedModelList').innerHTML = ranked
+    .map((m) => '<option value="' + escAttr(m.name) + '"></option>').join('');
+}
+$('embedModelSelect').onchange = () => {
+  try { localStorage.setItem('sagecrawl.embedModel', $('embedModelSelect').value); } catch {}
+};
+populateEmbedModels(); // before the first probe lands: "none" + the remembered model
 
 function setApiStatus(state, html) {
   $('api-status').className = 'ollama-status ' + state;
@@ -1139,6 +1240,9 @@ function setProvider(p) {
   $('model-dd').classList.toggle('hidden', provider !== 'ollama');
   $('apiModelWrap').classList.toggle('hidden', provider !== 'openai');
   $('ollamaHostCell').classList.toggle('hidden', provider !== 'ollama');
+  // Embedding control follows the provider: select (known local models) vs input.
+  $('embedModelSelect').classList.toggle('hidden', provider !== 'ollama');
+  $('embedModel').classList.toggle('hidden', provider === 'ollama');
   try {
     selectedModel = provider === 'openai'
       ? (localStorage.getItem('sagecrawl.model.openai') || $('apiModel').value.trim())
@@ -1271,11 +1375,24 @@ $('mode-seg').querySelectorAll('.seg-btn').forEach((b) => (b.onclick = () => {
 function applyNoAi(on) {
   $('aiSetup').classList.toggle('ai-off', on);
   $('noAiHint').style.display = on ? '' : 'none';
-  // Mode 'targeted' IS the AI (link gate + section scoping), so with no-AI it
-  // disables itself — visibly, with the reason on the button, never silently.
+  // #23 — the task speaks only to the AI: without AI it has no role, so everything
+  // it feeds DISAPPEARS with it — per-row task boxes, the shared-task control,
+  // "What to extract" (no model = 'complete' by definition), and the advanced
+  // fields that read the task or call a model. The core refuses them loudly
+  // anyway; the UI simply never shows a knob that cannot do anything.
+  rowsEl.classList.toggle('no-ai', on);
+  $('rowsLabel').textContent = on ? 'Links' : 'Links & tasks';
+  $('sharedChk').classList.toggle('hidden', on);
+  $('sharedWrap').classList.toggle('hidden', on || !$('sharedToggle').checked);
+  $('minRelCell').classList.toggle('hidden', on);
+  $('embedCell').classList.toggle('hidden', on);
+  // "What to extract" stays VISIBLE: no-AI IS "Everything · the whole site", and
+  // seeing it selected says so. Targeted disables itself with the reason on the
+  // button; the wordy complete-hint (it talks about the task) yields to noAiHint.
   const tBtn = $('mode-targeted');
   tBtn.disabled = on;
   tBtn.title = on ? 'Needs AI — untick “Crawl without AI” to use it' : '';
+  $('modeHint').style.display = on ? 'none' : '';
   if (on && uiMode === 'targeted') applyMode('complete');
 }
 $('noAi').onchange = (e) => {
@@ -1332,17 +1449,25 @@ async function renderHistory() {
     const when = (() => { try { return new Date(run.createdAt).toLocaleString(); } catch { return run.createdAt; } })();
     const tasks = [...new Set(scans.map((s) => s.task).filter(Boolean))];
     const nFiles = scans.reduce((n, s) => n + (s.files || []).length, 0);
+    // #13 — 'stopped' (voluntary Stop) and 'running' (crash/kill) are both
+    // resumable: the journal replays and the crawl completes in the SAME run.
+    const resumable = !!run.status && run.status !== 'done';
     el.innerHTML =
       '<div class="meta">' +
         '<div class="t">' + esc(scans.map((s) => s.title || s.url).join(', ') || '(run)') + '</div>' +
         '<div class="sub">' + scans.length + ' link(s) · ' + (run.pages || 0) + ' page(s) → ' + nFiles + ' file(s)' +
-          (tasks.length ? ' · ' + esc(tasks.join(' · ')) : '') + (run.warnings ? ' · ' + run.warnings + ' warn' : '') + '</div>' +
+          (tasks.length ? ' · ' + esc(tasks.join(' · ')) : '') + (run.warnings ? ' · ' + run.warnings + ' warn' : '') +
+          (resumable ? ' · <span class="st-resumable">' +
+            (run.status === 'stopped' ? 'stopped' : 'interrupted') + ' — resumable</span>' : '') + '</div>' +
       '</div>' +
       '<div class="when">' + esc(when) + '</div>' +
+      (resumable ? '<button class="resume" title="Complete this run from where it stopped — nothing already captured is redone">▶ Resume</button>' : '') +
       '<button class="danger" title="delete">✕</button>';
     el.querySelector('.meta').onclick = () => openRun(run.id);
     el.querySelector('.when').onclick = () => openRun(run.id);
-    el.querySelector('button').onclick = async (e) => {
+    const resBtn = el.querySelector('button.resume');
+    if (resBtn) resBtn.onclick = (e) => { e.stopPropagation(); resumeRun(run.id); };
+    el.querySelector('button.danger').onclick = async (e) => {
       e.stopPropagation();
       if (!confirm('Delete this run (all its links)?')) return;
       await fetch('/runs/' + encodeURIComponent(run.id), { method: 'DELETE' });
@@ -1359,11 +1484,31 @@ $('clearRuns').onclick = async () => {
   renderHistory();
 };
 
+// #13 — complete an interrupted run (crash or Stop) from where it left off: the
+// server replays the journal into the SAME run id and the crawl continues; events
+// stream in exactly like a live crawl.
+async function resumeRun(runId) {
+  enterRunView({ live: true });
+  connect();
+  const r = await fetch('/resume', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ runId }),
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    alert('Resume failed: ' + (e.error || r.status));
+    $('status').textContent = 'idle';
+    showView('setup');
+    renderHistory();
+  }
+}
+
 // ---------- run view: link tabs + the active link's panel ----------
 function clearRun() {
   runScans = []; activeScanId = null; liveRunId = null;
   $('link-tabs').innerHTML = '';
   $('run-files').innerHTML = '<span class="label">files</span><span class="muted">no files yet</span>';
+  $('rs-drawer').classList.add('hidden'); $('rsd-list').innerHTML = '';
   $('run-doc').classList.add('hidden'); $('run-doc').innerHTML = '';
   $('run-viewer').innerHTML = '<div class="empty">Select a file to view its Markdown.</div>';
   $('run-bar-i').style.width = '0'; $('run-prog').textContent = ''; resetStats();
@@ -1503,13 +1648,51 @@ function renderFilesBar(s) {
     fbar.insertAdjacentHTML('beforeend', '<span class="label">crawl</span>');
     s.files.forEach((f) => mkChip(f, 'crawl'));
   }
+  // Reshaped documents do NOT crowd the bar: one violet toggle opens their drawer
+  // (they can grow with every chat turn; the bar stays a single scrollable line).
   if (chatFiles.length) {
     if (s.files.length) fbar.insertAdjacentHTML('beforeend', '<span class="divider"></span>');
-    fbar.insertAdjacentHTML('beforeend', '<span class="label rs-label">reshaped</span>');
-    chatFiles.forEach((f) => mkChip(f, 'reshape'));
+    const tog = document.createElement('button');
+    tog.type = 'button';
+    tog.className = 'chip rs-toggle' + (s.rsDrawerOpen ? ' open' : '');
+    tog.innerHTML = '▤ reshaped · ' + chatFiles.length + ' <span style="opacity:.7">' + (s.rsDrawerOpen ? '▴' : '▾') + '</span>';
+    tog.title = 'Documents produced by the Reshape chat — click to ' + (s.rsDrawerOpen ? 'close' : 'open') + ' the drawer';
+    tog.onclick = () => { s.rsDrawerOpen = !s.rsDrawerOpen; renderFilesBar(s); };
+    fbar.appendChild(tog);
   }
+  renderRsDrawer(s);
   return true;
 }
+
+// The drawer itself: one row per reshaped document (violet = AI-reworked; the ⚠
+// count is the fidelity check's unverified values), viewer-linked like any chip.
+function renderRsDrawer(s) {
+  const box = $('rs-drawer');
+  const chatFiles = (s && s.chatFiles) || [];
+  const open = !!(s && s.rsDrawerOpen && chatFiles.length);
+  box.classList.toggle('hidden', !open);
+  if (!open) return;
+  $('rsd-count').textContent = chatFiles.length + ' file(s)';
+  const list = $('rsd-list');
+  list.innerHTML = '';
+  for (const f of chatFiles) {
+    const it = document.createElement('button');
+    it.type = 'button';
+    it.className = 'rsd-item';
+    it.dataset.name = f.filename;
+    const nWarn = (f.fidelity && f.fidelity.unverified && f.fidelity.unverified.length) || 0;
+    it.innerHTML = '<span class="rsd-name">' + esc(f.filename) + '</span>' +
+      (nWarn ? '<span class="rsd-warn" title="values not found in the crawled sources — details inside the file">⚠ ' + nWarn + '</span>' : '') +
+      (f.bytes != null ? '<span class="rsd-meta">' + esc(fmtBytes(f.bytes)) + '</span>' : '');
+    it.onclick = () => loadChatFile(s, f.filename);
+    list.appendChild(it);
+  }
+  syncDocChips(s);
+}
+$('rsd-close').onclick = () => {
+  const s = getScan(activeScanId);
+  if (s) { s.rsDrawerOpen = false; renderFilesBar(s); }
+};
 
 // Reflect the OPEN document everywhere at once: files-bar chips, the chat's file
 // chips, and the identity bar above the viewer. One source of truth (s.openDoc).
@@ -1517,6 +1700,8 @@ function syncDocChips(s) {
   const d = (s && s.openDoc) || {};
   $('run-files').querySelectorAll('.chip').forEach((c) =>
     c.classList.toggle('active', c.dataset.name === d.name && c.dataset.source === d.source));
+  $('rsd-list').querySelectorAll('.rsd-item').forEach((c) =>
+    c.classList.toggle('active', d.source === 'reshape' && c.dataset.name === d.name));
   $('rs-log').querySelectorAll('.rs-file').forEach((c) =>
     c.classList.toggle('active', d.source === 'reshape' && c.dataset.name === d.name));
 }
@@ -1737,8 +1922,9 @@ async function sendReshape() {
     }
     const idx = s.chatMessages.indexOf(pending);
     s.chatMessages[idx] = { role: 'assistant', content: reply, files: (data.files || []).map((f) => f.filename) };
-    // register the new files (bytes + fidelity ride along) → the FILES bar shows them
+    // register the new files (bytes + fidelity ride along) → the drawer shows them
     s.chatFiles = [...(s.chatFiles || []), ...(data.files || [])];
+    if ((data.files || []).length) s.rsDrawerOpen = true; // fresh documents present themselves
     if (activeScanId === s.scanId) {
       renderChatLog(s);
       renderFilesBar(s);

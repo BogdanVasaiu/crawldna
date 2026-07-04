@@ -38,6 +38,11 @@ const CHROME_SELECTORS = [
   // advertisements (carbon ads etc.) — never content
   '#carbonads', '.carbonads', '[class*=carbonads]', '[class*=carbon-ads]',
   '.advertisement', '.ad-container', '.ad-banner', '[data-ad]', '[id*=carbonads]',
+  // ARIA tab STRIPS — the row of tab labels is control chrome, never content: each
+  // captured state re-serialises the active/inactive label combination as junk text
+  // ("pnpmyarnnpmbun"). The PANELS (role=tabpanel) are the content and stay; the
+  // clicked tab's label survives as the reveal's visible variant marker.
+  '[role=tablist]', '[role=tab]',
 ];
 
 // Candidate containers for "the main content", best-first, used when no
@@ -59,6 +64,79 @@ function buildTurndown() {
   });
   td.use(gfm);
 
+  // ARIA lists (`role=list` / `role=listitem`) are real lists whatever tag carries
+  // them. App frameworks build every repeating surface this way (transaction
+  // feeds, stat cards, contact lists) out of <div>s — without this rule each FIELD
+  // of an item shatters into its own paragraph ("JL" / "John Leider" / "21 Mar" /
+  // "+$36.11") and the reader can no longer tell what belongs to what. One item =
+  // one bullet line, exactly like the native <li> treatment.
+  // Flatten an item's content to one line; nested item rules may already have
+  // emitted a bullet (a shaped row wrapping a role=listitem) — never stack two.
+  const inlineItem = (content) =>
+    String(content || '')
+      .replace(/\s*\n+\s*/g, ' ')
+      .trim()
+      .replace(/^(?:-\s+)+/, '');
+  td.addRule('ariaListItem', {
+    filter: (node) => (node.getAttribute && node.getAttribute('role')) === 'listitem',
+    replacement: (content) => '\n- ' + inlineItem(content) + '\n',
+  });
+  td.addRule('ariaList', {
+    filter: (node) => (node.getAttribute && node.getAttribute('role')) === 'list',
+    replacement: (content) => '\n\n' + String(content || '').replace(/\n{2,}/g, '\n').trim() + '\n\n',
+  });
+
+  // Role-LESS repeated rows: the same fix for app lists built from bare <div>s
+  // (transaction feeds, comment threads). The row signal is SHAPE, not a class
+  // name: ≥3 sibling divs sharing the same base class token, each a SHORT flat
+  // item (no headings/tables/fences/lists inside, not a table-cell fragment).
+  // Every guard is structural, so prose can never match (paragraphs are <p>,
+  // article sections differ in shape and carry block content).
+  const shapeToken = (n) => {
+    const cls = (n.getAttribute && n.getAttribute('class')) || '';
+    return `${n.nodeName}|${cls.split(/\s+/)[0] || ''}`;
+  };
+  const isShapedRow = (node) => {
+    if (node.nodeName !== 'DIV') return false;
+    const cls = (node.getAttribute && node.getAttribute('class')) || '';
+    if (!cls.trim()) return false;
+    const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 200) return false;
+    if (node.querySelector && node.querySelector('h1,h2,h3,h4,h5,h6,table,pre,ul,ol')) return false;
+    for (let p = node.parentNode; p; p = p.parentNode) {
+      if (p.nodeName === 'TD' || p.nodeName === 'TH') return false;
+    }
+    const want = shapeToken(node);
+    let alike = 0;
+    for (const sib of node.parentNode ? node.parentNode.childNodes : []) {
+      if (sib.nodeType === 1 && shapeToken(sib) === want) alike++;
+    }
+    return alike >= 3;
+  };
+  td.addRule('shapedRowItem', {
+    filter: isShapedRow,
+    replacement: (content) => '\n- ' + inlineItem(content) + '\n',
+  });
+
+  // A GFM table cell must be SINGLE-LINE. Real-world cells wrap their content in
+  // block markup (sort-button headers, status chips, rating widgets) and the gfm
+  // plugin passes the resulting newlines straight through — one multi-line cell
+  // shatters the entire table into garbage. Flatten each cell to one line and
+  // escape stray pipes; the row/border layout stays the plugin's. (Added after
+  // use(gfm), so this rule takes precedence over the plugin's tableCell.)
+  td.addRule('tableCellSingleLine', {
+    filter: ['th', 'td'],
+    replacement: (content, node) => {
+      const flat = String(content || '')
+        .replace(/\s*\n+\s*/g, ' ')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\|/g, '\\|')
+        .trim();
+      const index = Array.prototype.indexOf.call(node.parentNode.childNodes, node);
+      return (index === 0 ? '| ' : ' ') + flat + ' |';
+    },
+  });
+
   // Fenced code blocks that keep the language hint (language-js, lang-js,
   // hljs language-js, highlight-source-js, ...).
   td.addRule('fencedCodeWithLang', {
@@ -74,6 +152,24 @@ function buildTurndown() {
       const text = (codeEl.textContent || node.textContent || '').replace(/\n$/, '');
       const fence = '```';
       return `\n\n${fence}${lang}\n${text}\n${fence}\n\n`;
+    },
+  });
+
+  // #26 — visual headings: data-sagecrawl-heading="2|3|4" carries the level the
+  // page PAINTED (a big/bold short line) without using <h*>. Stamped in-browser
+  // from computed styles at capture (markVisualHeadings in engine/perceive.mjs)
+  // or from inline styles in the static path (markVisualHeadings below). Emit a
+  // real ATX heading so the .md keeps the page's skeleton: the text is verbatim,
+  // only the #'s are added. Added LAST so it wins over shapedRowItem for a
+  // marked element (a title is never a data row).
+  td.addRule('visualHeading', {
+    filter: (node) =>
+      /^[2-6]$/.test((node.getAttribute && node.getAttribute('data-sagecrawl-heading')) || ''),
+    replacement: (content, node) => {
+      const text = String(content || '').replace(/\s*\n+\s*/g, ' ').trim();
+      if (!text) return '';
+      const level = parseInt(node.getAttribute('data-sagecrawl-heading'), 10);
+      return '\n\n' + '#'.repeat(level) + ' ' + text + '\n\n';
     },
   });
 
@@ -128,6 +224,170 @@ function pickMainContent(root, contentSelector) {
   return best || root.querySelector('body') || root;
 }
 
+// --- #26: visual headings (the .md's skeleton) ------------------------------
+// Apps mark titles VISUALLY, not semantically: a card/section title is a short
+// <div> painted bigger (or bolder) than the text around it, and Turndown only
+// trusts <h1>–<h6> — so the page's skeleton flattens to anonymous lines. The
+// browser path stamps data-sagecrawl-heading="2|3|4" from COMPUTED styles at
+// capture time (markVisualHeadings in engine/perceive.mjs, inlined into
+// reveal's captureHtml); this is its Node TWIN for the static path: the same
+// ratio rules (rule #2 — a font ratio, never a class name) applied to INLINE
+// styles, which are all a static fetch carries. Deterministic, zero model
+// calls (identical under --no-ai), and it only ever ADDS a heading level —
+// no text is removed or rewritten (rule #1). Keep in sync with the browser twin.
+
+const FONT_SIZE_RE = /(?:^|;)\s*font-size\s*:\s*([0-9.]+)\s*(px|pt|rem)\b/i;
+const FONT_WEIGHT_RE = /(?:^|;)\s*font-weight\s*:\s*(bolder|bold|normal|[0-9]{3})\b/i;
+
+function inlineSizePx(el) {
+  const m = FONT_SIZE_RE.exec((el.getAttribute && el.getAttribute('style')) || '');
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  const unit = m[2].toLowerCase();
+  return unit === 'pt' ? v * (4 / 3) : unit === 'rem' ? v * 16 : v;
+}
+
+function inlineWeight(el) {
+  const m = FONT_WEIGHT_RE.exec((el.getAttribute && el.getAttribute('style')) || '');
+  if (m) return /^bold/i.test(m[1]) ? 700 : m[1].toLowerCase() === 'normal' ? 400 : parseInt(m[1], 10);
+  // NB: node-html-parser elements expose tagName (uppercase), NOT nodeName —
+  // nodeName only exists on turndown's own DOM inside the conversion rules.
+  if (el.tagName === 'B' || el.tagName === 'STRONG') return 700; // tag-implied bold
+  return null;
+}
+
+/** Inline styles cascade: resolve by the nearest self-or-ancestor declaration. */
+function resolvedSize(el) {
+  for (let n = el; n && n.getAttribute; n = n.parentNode) {
+    const s = inlineSizePx(n);
+    if (s) return s;
+  }
+  return 16; // browser default
+}
+
+function resolvedWeight(el) {
+  for (let n = el; n && n.getAttribute; n = n.parentNode) {
+    const w = inlineWeight(n);
+    if (w) return w;
+  }
+  return 400;
+}
+
+const SKIP_TEXT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
+
+/** Char-weighted font metrics of a subtree's text (optionally excluding one
+ *  branch): histogram + extremes. Budgeted in TEXT NODES visited. */
+function visualStats(root, excl, budget = 400) {
+  const st = { chars: 0, bySize: new Map(), maxSize: 0, minSize: Infinity, maxWeight: 0 };
+  const stack = [root];
+  let visits = 0;
+  while (stack.length && visits < budget) {
+    const n = stack.pop();
+    if (n === excl) continue;
+    if (n.nodeType === 3) {
+      visits++;
+      const t = (n.text || '').replace(/\s+/g, ' ').trim();
+      if (t.length < 2) continue;
+      const el = n.parentNode;
+      if (!el || SKIP_TEXT_TAGS.has(el.tagName)) continue;
+      const size = Math.round(resolvedSize(el) * 2) / 2;
+      const weight = resolvedWeight(el);
+      st.chars += t.length;
+      st.bySize.set(size, (st.bySize.get(size) || 0) + t.length);
+      if (size > st.maxSize) st.maxSize = size;
+      if (size < st.minSize) st.minSize = size;
+      if (weight > st.maxWeight) st.maxWeight = weight;
+    } else if (n.nodeType === 1 && !SKIP_TEXT_TAGS.has(n.tagName)) {
+      for (const c of n.childNodes) stack.push(c);
+    }
+  }
+  return st;
+}
+
+function dominantSize(bySize, fallback) {
+  let best = fallback;
+  let chars = 0;
+  for (const [size, ch] of bySize) {
+    if (ch > chars) {
+      chars = ch;
+      best = size;
+    }
+  }
+  return best;
+}
+
+// Never a heading: interactive/label surfaces, cells, list items (#25), code,
+// real headings — and nothing nested under an already-marked title.
+const HEADING_BANNED_TAGS = new Set([
+  'A', 'BUTTON', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TABLE', 'TH', 'TD',
+  'LI', 'UL', 'OL', 'DL', 'PRE', 'CODE', 'KBD', 'SAMP', 'LABEL', 'SELECT',
+  'OPTION', 'TEXTAREA', 'INPUT', 'SUMMARY', 'FIGCAPTION', 'BLOCKQUOTE',
+  'NAV', 'ASIDE', 'FOOTER',
+]);
+const HEADING_BANNED_ROLES = /^(heading|button|tab|list|listitem)$/i;
+
+function headingBannedAt(el) {
+  for (let n = el; n && n.getAttribute; n = n.parentNode) {
+    if (HEADING_BANNED_TAGS.has(n.tagName)) return true;
+    const role = n.getAttribute('role');
+    if (role && HEADING_BANNED_ROLES.test(role)) return true;
+    if (n.getAttribute('data-sagecrawl-heading')) return true;
+  }
+  return false;
+}
+
+const HEADING_STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea';
+
+/** Stamp data-sagecrawl-heading="2|3|4" on inline-styled visual titles. Mutates
+ *  the tree (attributes only — content untouched). Browser-stamped markers are
+ *  respected, never re-done. */
+function markVisualHeadings(content) {
+  const page = visualStats(content, null, 4000);
+  if (!page.chars) return;
+  const body = dominantSize(page.bySize, 16);
+  for (const el of content.querySelectorAll('div, p, section, header')) {
+    if (el.getAttribute('data-sagecrawl-heading')) continue;
+    const text = textOf(el);
+    if (text.length < 2 || text.length > 60) continue; // a title is one short line
+    if (!/\p{L}/u.test(text)) continue; // bare numbers/prices are data, not titles
+    if (headingBannedAt(el)) continue;
+    if (el.querySelector(HEADING_STRUCTURAL)) continue;
+    // Repeated same-shape siblings are DATA ROWS (#25 renders them as bullets),
+    // never titles: a transaction row with a bold name must not become an h4.
+    // Same shape signal as shapedRowItem above: tag + first class token.
+    const cls0 = ((el.getAttribute('class') || '').split(/\s+/)[0] || '');
+    if (cls0 && el.parentNode) {
+      let alike = 0;
+      for (const sib of el.parentNode.childNodes) {
+        if (
+          sib.nodeType === 1 &&
+          sib.tagName === el.tagName &&
+          ((((sib.getAttribute && sib.getAttribute('class')) || '').split(/\s+/)[0]) || '') === cls0
+        ) alike++;
+      }
+      if (alike >= 3) continue;
+    }
+    const st = visualStats(el, null);
+    if (!st.chars || st.maxSize < body) continue; // never smaller than the page body font
+    if (st.minSize < 0.75 * st.maxSize) continue; // mixed sizes = composite block, not a title
+    // LOCAL body font: dominant size of the surrounding text, so an all-big
+    // block (a hero) does not promote its own lines.
+    let local = body;
+    for (let anc = el.parentNode, hops = 0; anc && anc.getAttribute && hops < 6; hops++, anc = anc.parentNode) {
+      const around = visualStats(anc, el);
+      if (around.chars >= 40) {
+        local = dominantSize(around.bySize, body);
+        break;
+      }
+    }
+    const jump = st.maxSize >= 1.15 * local || (st.maxWeight >= 600 && st.maxSize >= local);
+    if (!jump) continue;
+    const ratio = st.maxSize / body;
+    const level = ratio >= 1.8 ? 2 : ratio >= 1.35 ? 3 : 4;
+    el.setAttribute('data-sagecrawl-heading', String(level));
+  }
+}
+
 // Tokens that occur ONLY inside (often URL-encoded) inline-SVG markup and never
 // in real prose. When a data-URI SVG image breaks attribute parsing, its body
 // spills into the text as garbage blocks; this lets us drop those blocks even
@@ -169,15 +429,31 @@ export function contentWordLen(markdown) {
 
 /** Remove clearly-navigational, link-dense containers from within the content node.
  *  Universal (a ratio, never a class name) and bounded (only containers that are almost
- *  all links with little text of their own). Mutates `content`; returns the count removed. */
-function pruneNavByLinkDensity(content) {
+ *  all links with little text of their own). NAVIGATION navigates the SITE, so a
+ *  link-dense container is pruned only when its links stay overwhelmingly on `host`
+ *  (relative hrefs count as internal): a list pointing mostly OFF-site is a
+ *  reference/resource list — content the cascade below cannot protect, because
+ *  contentWordLen ignores link text by design. Mutates `content`; returns the count
+ *  removed. */
+function pruneNavByLinkDensity(content, host = '') {
   const MIN_LINKS = 4; // a couple of links is prose; navigation has many
   const DENSITY = 0.8; // ≥80% of the text is anchor text → navigation
   const MAX_NONLINK_CHARS = 200; // and little text of its own (bullets / separators)
+  const MAX_EXTERNAL = 0.2; // more than this fraction off-site → references, kept
+  const naked = (h) => String(h || '').toLowerCase().replace(/^www\./, '');
+  const site = naked(host);
   const matches = [];
   for (const el of content.querySelectorAll('ul, ol, nav, div, section')) {
     const anchors = el.querySelectorAll('a');
     if (anchors.length < MIN_LINKS) continue;
+    if (site) {
+      let external = 0;
+      for (const a of anchors) {
+        const m = (a.getAttribute('href') || '').match(/^https?:\/\/([^/:?#]+)/i);
+        if (m && naked(m[1]) !== site) external++;
+      }
+      if (external / anchors.length > MAX_EXTERNAL) continue;
+    }
     const total = textOf(el).length;
     if (!total) continue;
     let linkLen = 0;
@@ -215,6 +491,52 @@ function pruneNavByLinkDensity(content) {
 const TOOLBAR =
   '(?:edit (?:this )?page|edit (?:on|in) github|edit source|copy (?:page|markdown)(?: as markdown)?|copy as markdown|view source|view (?:page )?source|open in [^\\]\\n]{0,30}|report (?:an? )?(?:issue|problem|bug)|give feedback|send feedback|provide feedback|was this (?:page )?helpful[^\\n]*)';
 
+/** Line-level Markdown cleanups that must NEVER reach inside a fenced code block:
+ *  drop toolbar/artifact lines, collapse whitespace runs BETWEEN words (leading
+ *  indentation is structure — nested lists and code depend on it), trim trailing
+ *  spaces, cap blank runs at one. The previous whole-string regexes flattened the
+ *  indentation of every ``` fence too, wrecking each code sample's layout. */
+function cleanupLines(markdown) {
+  const toolbarLine = new RegExp('^[ \\t]*' + TOOLBAR + '[ \\t]*$', 'i');
+  const out = [];
+  let inFence = false;
+  let fence = '';
+  let blanks = 0;
+  for (const line of String(markdown).split('\n')) {
+    const m = line.match(/^\s*(```+|~~~+)/);
+    if (m) {
+      if (!inFence) {
+        inFence = true;
+        fence = m[1];
+      } else if (line.trim().startsWith(fence)) {
+        inFence = false;
+      }
+      out.push(line);
+      blanks = 0;
+      continue;
+    }
+    if (inFence) {
+      out.push(line); // verbatim inside code
+      continue;
+    }
+    const l = line.replace(/(\S)[ \t]{2,}/g, '$1 ').replace(/[ \t]+$/, '');
+    // toolbar actions rendered as plain standalone lines
+    if (toolbarLine.test(l)) continue;
+    // orphan link-close artifacts from broken next/prev nav-card markup: a line
+    // that is only `](url)` with no opening bracket.
+    if (/^[ \t]*\]\([^)]*\)[ \t]*$/.test(l)) continue;
+    // orphan punctuation from a card whose image/body was removed: a line that is
+    // only `[`, `]` or `!` is never meaningful Markdown outside a fence.
+    if (/^[[\]!]$/.test(l.trim())) continue;
+    if (l.trim() === '') {
+      blanks++;
+      if (blanks > 1) continue;
+    } else blanks = 0;
+    out.push(l);
+  }
+  return out.join('\n').trim();
+}
+
 /** Turndown a prepared content node and run the deterministic Markdown cleanups. */
 function renderMarkdown(content) {
   const td = buildTurndown();
@@ -225,23 +547,19 @@ function renderMarkdown(content) {
     markdown = textOf(content);
   }
   markdown = markdown
-    // permalink/anchor links whose visible text is just '#', '¶', or empty
-    .replace(/\[\s*[#¶]?\s*\]\([^)]*\)/g, '')
+    // permalink/anchor links whose visible text is just '#', '¶', or empty —
+    // but never the `[](src)` tail of an image `![](src)` (the lookbehind), or a
+    // lazy-loaded empty-alt avatar would leave an orphan `!` in its place,
+    // corrupting the block (and its dedup identity) in every later capture.
+    .replace(/(?<!!)\[\s*[#¶]?\s*\]\([^)]*\)/g, '')
     // sponsor/ad links rendered inline ("ads via …", "sponsored by …")
     .replace(/\[\s*(?:ads?\s+via|sponsored\b|advertisement)[^\]]*\]\([^)]*\)/gi, '')
     // toolbar actions rendered as links (text may span lines)
     .replace(new RegExp('\\[\\s*' + TOOLBAR + '\\s*\\]\\([^)]*\\)', 'gi'), '')
-    // toolbar actions rendered as plain standalone lines
-    .replace(new RegExp('^[ \\t]*' + TOOLBAR + '[ \\t]*$', 'gim'), '')
-    // orphan link-close artifacts from broken next/prev nav-card markup: a line
-    // that is only `](url)` with no opening bracket.
-    .replace(/^[ \t]*\]\([^)]*\)[ \t]*$/gm, '')
     // trailing "next/prev page" footer navigation block (kept conservative to
     // clearly-navigational lead-ins so real "next steps" content is not cut).
-    .replace(/\n#{1,6}[ \t]*(?:ready for more|continue your learning|keep reading)\b[\s\S]*$/i, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .replace(/\n#{1,6}[ \t]*(?:ready for more|continue your learning|keep reading)\b[\s\S]*$/i, '');
+  markdown = cleanupLines(markdown);
 
   // Final safety net: remove any inline-SVG/data-URI image noise that leaked as text
   // (broken data-URI attributes spill their SVG body into the document).
@@ -306,13 +624,47 @@ export function extractMarkdown(html, { contentSelector, baseUrl, title } = {}) 
   // drop any that slipped through (e.g. namespaced) so their markup never leaks.
   for (const n of content.querySelectorAll('svg')) n.remove();
 
+  // Self-served ad cards with no stable class/id (docs themes' own promos) still
+  // carry the Carbon-convention label "ads via <sponsor>". Remove the unit by that
+  // label: when the label sits inside a link, the link IS the ad's clickable card —
+  // drop the whole card (image + ad copy included), else just the label element.
+  // Bounded to short, label-only elements so prose mentioning the phrase survives.
+  const adCards = [];
+  for (const el of content.querySelectorAll('a, span, div, small, p')) {
+    const t = textOf(el);
+    if (t.length <= 30 && /^ads?\s+via\b/i.test(t)) adCards.push(el.closest('a') || el);
+  }
+  for (const el of adCards) {
+    try {
+      el.remove();
+    } catch {
+      /* already detached with its card */
+    }
+  }
+
+  // #26 — recover the page's visual skeleton: inline-styled titles get their
+  // data-sagecrawl-heading marker (browser captures arrive with markers already
+  // stamped from computed styles; those are respected, not re-done). Adds
+  // attributes only — marking can never change or lose text.
+  try {
+    markVisualHeadings(content);
+  } catch {
+    /* marking must never break extraction */
+  }
+
   // #8 — extract PRECISELY (prune link-dense in-content navigation), but CASCADE: keep
   // the pruned result only when it preserved the page's non-link content; otherwise fall
   // back to the un-pruned extraction. So navigation boilerplate is trimmed without ever
   // losing real prose/code. `full` is computed BEFORE pruning (it is the safe fallback).
   const full = renderMarkdown(content);
   let markdown = full;
-  if (pruneNavByLinkDensity(content) > 0) {
+  let host = '';
+  try {
+    host = new URL(baseUrl || '').hostname;
+  } catch {
+    /* no base → no internal/external signal; density alone decides, as before */
+  }
+  if (pruneNavByLinkDensity(content, host) > 0) {
     const pruned = renderMarkdown(content);
     // Accept the trim only if it kept ≥98% of the non-link word content — i.e. it
     // removed navigation, not content. This is the "precise → permissive" fallback.
@@ -472,7 +824,28 @@ export function applyExclusions(markdown, exclude = {}) {
   return md;
 }
 
-const normalizeBlock = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+/** A block's DEDUP identity. Decorative empty-alt images (`![](src)`) are excluded
+ *  from it: they lazy-load, so the same row serialises WITHOUT its avatar in the
+ *  baseline capture and WITH it a click later — two keys for one block, and the
+ *  whole table/list re-enters the document on every state. Images with real alt
+ *  text stay in the key (two cards may differ only by their pictures); a block
+ *  that is ONLY an image keeps its full identity. */
+const normalizeBlock = (s) => {
+  let t = s;
+  // A TABLE's identity is its ROWS, not their order: clicking a sortable column
+  // header re-serialises the same table re-sorted, and keeping every ordering
+  // repeats it whole. Sort the row lines for the KEY only (the stored block stays
+  // verbatim, first-seen ordering).
+  if (/^\s*\|/.test(t) && /\n\s*\|?[\s:|-]*-{2,}/.test(t)) {
+    t = t
+      .split('\n')
+      .map((l) => l.trim())
+      .sort()
+      .join('\n');
+  }
+  const noDecorative = t.replace(/!\[\s*\]\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  return noDecorative || t.replace(/\s+/g, ' ').trim().toLowerCase();
+};
 
 /**
  * Accumulates unique content blocks seen across many page states (e.g. each tab
@@ -483,28 +856,61 @@ const normalizeBlock = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 export class BlockAccumulator {
   constructor() {
     this.seen = new Set();
-    this.blocks = []; // { text, label, provenance }
+    this.blocks = []; // { key, text, label, provenance }
   }
 
   /**
-   * Append the *new* blocks of `markdown` in capture order. Append-only is
-   * deliberate: revealed states (framework tabs like Vite/Nuxt/Laravel/…) are
-   * mutually exclusive and never coexist in one capture, so we cannot infer
-   * their document position — capture order (= the reveal's DOM click order)
-   * keeps them in natural reading order. Returns the count of new blocks.
+   * Merge the *new* blocks of `markdown` into the accumulated document IN PLACE:
+   * each new block is inserted right before the nearest FOLLOWING block the
+   * accumulator already holds — i.e. at its position in the new state's own
+   * reading order — falling back to append when nothing known follows it.
+   * Mutually-exclusive reveal states (framework tabs like pnpm/yarn/npm/bun)
+   * thus land beside the sibling they replace, in the section they belong to,
+   * instead of piling up at the end of the document detached from all context
+   * (appended content — load-more, lazy scroll — still ends up at the end,
+   * because nothing known follows it). Returns the count of new blocks.
    *
-   * `label` is the TAB-variant marker used by toMarkdown (unchanged behaviour).
+   * `label` is the TAB-variant marker used by toMarkdown.
    * `provenance` is the richer reveal source carried to the layout router
    * (`baseline` / `tab:…` / `expander:…` / `dropdown:…` / `loadmore`).
    */
   add(markdown, { label, provenance } = {}) {
+    const texts = splitBlocks(markdown);
+    const n = texts.length;
+    const at = new Map(this.blocks.map((b, i) => [b.key, i]));
+    const keys = new Array(n);
+    const matched = new Array(n); // capture block -> its accumulator index, or -1 if new
+    for (let i = 0; i < n; i++) {
+      keys[i] = createHash('sha1').update(normalizeBlock(texts[i])).digest('hex');
+      matched[i] = at.has(keys[i]) ? at.get(keys[i]) : -1;
+    }
+    // Anchor scan (right to left): a new block inserts before the accumulator
+    // position of the next matched block in THIS capture.
+    const before = new Array(n);
+    let next = this.blocks.length;
+    for (let i = n - 1; i >= 0; i--) {
+      if (matched[i] >= 0) next = matched[i];
+      before[i] = next;
+    }
+    const inserts = new Map(); // accumulator index -> new blocks to insert before it
     let added = 0;
-    for (const text of splitBlocks(markdown)) {
-      const key = createHash('sha1').update(normalizeBlock(text)).digest('hex');
-      if (this.seen.has(key)) continue;
-      this.seen.add(key);
-      this.blocks.push({ text, label: label || null, provenance: provenance || 'baseline' });
+    for (let i = 0; i < n; i++) {
+      if (matched[i] >= 0 || this.seen.has(keys[i])) continue; // known, or dup within this capture
+      this.seen.add(keys[i]);
+      const blk = { key: keys[i], text: texts[i], label: label || null, provenance: provenance || 'baseline' };
+      const list = inserts.get(before[i]);
+      if (list) list.push(blk);
+      else inserts.set(before[i], [blk]);
       added++;
+    }
+    if (added) {
+      const merged = [];
+      for (let i = 0; i <= this.blocks.length; i++) {
+        const ins = inserts.get(i);
+        if (ins) merged.push(...ins);
+        if (i < this.blocks.length) merged.push(this.blocks[i]);
+      }
+      this.blocks = merged;
     }
     return added;
   }
@@ -522,9 +928,11 @@ export class BlockAccumulator {
     const out = [];
     let lastLabel = null;
     for (const blk of this.blocks) {
-      if (blk.label && blk.label !== lastLabel) out.push(`<!-- variant: ${blk.label} -->`);
-      if (!blk.label) lastLabel = null;
-      else lastLabel = blk.label;
+      // A VISIBLE variant marker: the tab's own label, bold, where the original UI
+      // showed the tab. An HTML comment (`<!-- variant: … -->`) disappears in every
+      // rendered view, leaving the variants indistinguishable from one another.
+      if (blk.label && blk.label !== lastLabel) out.push(`**${blk.label}:**`);
+      lastLabel = blk.label || null;
       out.push(blk.text);
     }
     return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();

@@ -23,7 +23,7 @@
 // A set of visited state fingerprints prevents cycles; the action budget and a
 // per-control re-use cap guarantee termination.
 
-import { perceive } from './perceive.mjs';
+import { perceive, markVisualHeadings } from './perceive.mjs';
 import { pickConsent } from './consent.mjs';
 import { clickRevealer, scrollStep } from './actions.mjs';
 import { settle } from '../lib/settle.mjs';
@@ -85,6 +85,22 @@ export async function revealAll(page, ctx, url, task) {
   const doneLeaf = new Set(); // signatures of leaf/in-place controls already clicked
   const advancing = new Map(); // signature -> { appliedFrom: Set<fp>, uses: number }
   const visited = new Set(); // state fingerprints already captured (cycle guard)
+
+  // MEASURED FUTILITY GUARD. Interactive apps attach click handlers to plain DATA
+  // rows (stat cards, table rows, chips — ripple frameworks do this by default),
+  // and no-AI mode approves every candidate, so the action budget can drain on
+  // dozens of identical-looking rows that reveal nothing — starving the controls
+  // that DO (an embedded app's Analytics/Chat views). Controls sharing a visual
+  // SHAPE (role|kind|class) are probed a few times; once SHAPE_DEAD consecutive
+  // members click to no effect (no new blocks, no state change, no navigation)
+  // the remaining look-alikes are muted for this page. One member with a real
+  // effect re-arms its shape (calendar days stay alive: the first day already
+  // reveals its slots). Measured, not judged — and bounded: a fruitless shape
+  // costs at most SHAPE_DEAD clicks instead of one per member.
+  const SHAPE_DEAD = 3;
+  const shapeKey = (r) => `${r.role}|${r.kind}|${r.cls || ''}`;
+  const shapeFails = new Map(); // shapeKey -> consecutive no-effect clicks
+  const shapeMuted = (r) => (shapeFails.get(shapeKey(r)) || 0) >= SHAPE_DEAD;
   const maxActions = Math.max(8, ctx.options.maxActions || 40);
   // Bound how many times a single view-advancing control may re-apply, so a
   // bidirectional paginator (prev/next) can't loop forever within the budget.
@@ -106,9 +122,21 @@ export async function revealAll(page, ctx, url, task) {
   // active (so all still accumulate); chrome never revealed stays out. Generic —
   // no per-site logic. If reveal misses a control, raise --max-actions (the right
   // knob), rather than leaking every hidden panel.
+  // #26 — the same atomic pass also stamps data-sagecrawl-heading on VISUAL
+  // headings (short lines whose font jumps vs the local body text): computed
+  // styles only exist here in the browser, and extract.mjs turns the marker
+  // into ##/###/####, giving the .md the skeleton the page painted. The
+  // function lives in perceive.mjs and is inlined via toString() — a string
+  // evaluate, not a nested eval, so page CSP never blocks it.
   const captureHtml = async () => {
     try {
-      return await page.evaluate(() => {
+      return await page.evaluate(`(() => {
+        let headingMarked = [];
+        try {
+          headingMarked = (${markVisualHeadings.toString()})() || [];
+        } catch (e) {
+          headingMarked = document.querySelectorAll('[data-sagecrawl-heading]');
+        }
         const isHidden = (el) => {
           const s = getComputedStyle(el);
           if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return true;
@@ -124,8 +152,9 @@ export async function revealAll(page, ctx, url, task) {
         }
         const out = document.documentElement.outerHTML;
         for (const el of marked) el.removeAttribute('data-sagecrawl-hidden');
+        for (const el of headingMarked) el.removeAttribute('data-sagecrawl-heading');
         return out;
-      });
+      })()`);
     } catch {
       return page.content();
     }
@@ -319,7 +348,11 @@ export async function revealAll(page, ctx, url, task) {
     // (it's only ever applied by the targeted walk in (A) or the open-ended sweep in (C)).
     if (!next) {
       next = approved.find(
-        (r) => !doneLeaf.has(r.signature) && !advancing.has(r.signature) && !(navPlan && r.signature === navPlan.directionSig),
+        (r) =>
+          !doneLeaf.has(r.signature) &&
+          !advancing.has(r.signature) &&
+          !(navPlan && r.signature === navPlan.directionSig) &&
+          !shapeMuted(r),
       );
     }
 
@@ -388,7 +421,15 @@ export async function revealAll(page, ctx, url, task) {
       continue;
     }
 
-    const label = next.kind === 'tab' ? next.label : undefined;
+    // The visible variant marker's label. Tabs always carry it; a generic control
+    // or dropdown carries it too when its label is short (an app's view switcher —
+    // "Analytics", "90D" — not a data row's whole text): if the click adds blocks,
+    // the reader must see WHICH state produced them. Expanders/load-more stay
+    // unlabelled — their revealed content follows its own heading in the document.
+    const label =
+      ['tab', 'control', 'dropdown'].includes(next.kind) && next.label && next.label.length <= 32
+        ? next.label
+        : undefined;
     const provenance = next.label ? `${next.kind}:${next.label}` : next.kind;
     const added = await capture(label, provenance);
 
@@ -435,6 +476,27 @@ export async function revealAll(page, ctx, url, task) {
       // IN-PLACE reveal (tab/accordion/expander/slot panel): a leaf, done once.
       doneLeaf.add(next.signature);
       if (newState) visited.add(after.fingerprint);
+      // Futility bookkeeping: a click with NO effect at all (no new blocks AND
+      // the state fingerprint did not move) counts against its shape; any real
+      // effect re-arms the whole shape.
+      if (!added && after.fingerprint === fp) {
+        const sk = shapeKey(next);
+        const fails = (shapeFails.get(sk) || 0) + 1;
+        shapeFails.set(sk, fails);
+        if (fails === SHAPE_DEAD) {
+          const muted = perception.revealers.filter((r) => !doneLeaf.has(r.signature) && decided.get(r.signature) && shapeKey(r) === sk).length;
+          if (muted > 0) {
+            ctx.emit({
+              type: 'action',
+              url,
+              action: 'skip',
+              detail: `muting ${muted} look-alike control(s) — ${SHAPE_DEAD} identical clicks had no effect (e.g. ${next.label || '(unlabelled)'})`,
+            });
+          }
+        }
+      } else {
+        shapeFails.set(shapeKey(next), 0);
+      }
       // #21c — BEHAVIOURAL load-more: a control that just ADDED content, still
       // exists, and GREW the page (append — a tab swap keeps the height) behaves
       // like "load more" whatever language its label is in. Keep re-clicking it

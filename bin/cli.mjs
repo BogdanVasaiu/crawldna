@@ -47,7 +47,8 @@ UI). It works over the saved files, as many times as you like — crawl once,
 reshape many times.
 
 Options:
-  --task <text>          extraction task (repeatable, pairs with --url)
+  --task <text>          extraction task (repeatable, pairs with --url; speaks to
+                         the AI, so it is refused with --no-ai)
                          default: "${DEFAULT_OPTIONS.task}"
   --url <url>            a target URL (repeatable; pair with --task for per-link tasks)
   --targets <file.json>  JSON file: a targets array ([{ "url", "task" }, ...])
@@ -57,9 +58,11 @@ Options:
   --no-ai                crawl without any model: the reveal engine still runs
                          (heuristic-triaged clicks), but pages are kept whole and
                          EVERY in-scope link is followed. Zero tokens, no model
-                         needed; output is not task-filtered and big sites can
-                         take longer — pair with --include/--exclude,
-                         --min-relevance or --max-pages to contain the crawl
+                         needed. The task speaks only to the AI, so here it has NO
+                         role: --task (and --min-relevance, which reads it) is
+                         refused, output files are named from the site. Big sites
+                         can take longer — contain the crawl with
+                         --include/--exclude or --max-pages
                          (incompatible with --mode targeted, which IS the AI)
   --mode <m>             what to extract — an explicit switch, not guessed from
                          the task text (default: ${DEFAULT_OPTIONS.mode}):
@@ -69,8 +72,8 @@ Options:
                                      with --no-ai too)
                            targeted  only what the task asks: AI link gate +
                                      section scoping, in any language (needs AI)
-                           auto      legacy: the task wording decides (kept for
-                                     backward compatibility of saved runs/scripts)
+                           auto      legacy: the task wording decides — never the
+                                     default; only for old saved runs/scripts
   --base-url <url>       API base URL for --provider openai
                          (e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1)
   --api-key <key>        API key for --provider openai
@@ -86,7 +89,8 @@ Options:
   --respect-robots       politeness (opt-in): read robots.txt — disallowed URLs are
                          SKIPPED with a warning (never silently); Crawl-delay is
                          honoured (the larger of it and --delay wins)
-  --min-relevance <0-1>  focus on task: skip links below this task-relevance (default: ${DEFAULT_OPTIONS.minRelevance} = off)
+  --min-relevance <0-1>  focus on task: skip links below this task-relevance
+                         (default: ${DEFAULT_OPTIONS.minRelevance} = off; reads the task → refused with --no-ai)
   --max-routes <n>       cap the JS-mined route candidates sent to the AI link gate,
                          top-ranked by task relevance (default: ${DEFAULT_OPTIONS.maxRoutes}; 0 = unlimited;
                          only cuts when the task discriminates — DOM links are never capped)

@@ -171,12 +171,12 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
       }
 
       // ---- revealers, scoped to the main content --------------------------
+      const realMain = mainEl !== document.body;
       for (const el of mainEl.querySelectorAll(candidateSel)) {
         if (revealers.length >= maxRevealers) break;
         if (considered.has(el)) continue;
         considered.add(el);
         if (!isVisible(el)) continue;
-        if (isChrome(el)) continue;
 
         const tag = el.tagName.toLowerCase();
         const role = el.getAttribute('role') || tag;
@@ -184,6 +184,24 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         const cls = el.getAttribute('class') || '';
         const style = getComputedStyle(el);
         const href = el.getAttribute('href') || '';
+        const hasListener = el.hasAttribute('data-sagecrawl-listener') || el.hasAttribute('onclick');
+
+        // A landmark (<nav>/<aside>/[role=navigation]…) marks SITE chrome — but
+        // only relative to the page. When the main container is REAL (not the
+        // <body> fallback), a landmark NESTED INSIDE IT belongs to the content:
+        // an embedded app's own drawer/rail (a dashboard demo's Dashboard/
+        // Analytics/Chat nav) is how that app switches views, and skipping it
+        // silently loses every non-default view (rule #1). So inside a real main
+        // container a JS CONTROL — sniffed listener or an interactive tag/role,
+        // never a plain <a>, which stays a link for the gate — survives the
+        // chrome check. With the <body> fallback the landmark rule stays
+        // authoritative (there, nav really is the site's own).
+        const jsControl =
+          tag !== 'a' &&
+          (hasListener ||
+            ['button', 'summary', 'select', 'details'].includes(tag) ||
+            ['button', 'tab', 'switch', 'option', 'checkbox', 'combobox', 'menuitemradio'].includes(role));
+        if (isChrome(el) && !(realMain && jsControl)) continue;
 
         // Skip DISABLED controls — clicking them reveals nothing, so they only burn
         // the action budget (e.g. a calendar's non-selectable days, a greyed-out
@@ -207,7 +225,6 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
         const ariaControls = el.getAttribute('aria-controls') || '';
         const ariaSelected = el.getAttribute('aria-selected');
         const ariaPressed = el.getAttribute('aria-pressed');
-        const hasListener = el.hasAttribute('data-sagecrawl-listener') || el.hasAttribute('onclick');
         const pointer = style.cursor === 'pointer';
         const interactiveClass = INTERACTIVE_CLASS.test(cls);
 
@@ -368,6 +385,161 @@ export async function perceive(page, { maxText = 2500, maxRevealers = 150, maxLi
   data.mainText = data.mainText.slice(0, maxText);
   data.fingerprint = fingerprintOf(data);
   return data;
+}
+
+// #26 — mark VISUAL headings: elements the page styles AS titles (a short
+// standalone line whose font JUMPS vs the local body text) without using <h*>.
+// Apps mark titles visually, not semantically — Turndown only trusts <h1>–<h6>,
+// so every card/section title painted with a bigger font flattens to anonymous
+// text and the page loses its skeleton. Runs IN THE BROWSER (getComputedStyle):
+// self-contained ON PURPOSE — reveal's captureHtml inlines it via .toString()
+// into its evaluate, atomically with the data-sagecrawl-hidden pass (mark →
+// serialize → unmark), so no marker ever leaks into the live DOM of the next
+// state. The signal is a RATIO, never a class name (rule #2): fontSize ≥ 1.15×
+// the LOCAL body font, or bold (≥600) at ≥ body size. The level maps from the
+// jump vs the PAGE body font (≥1.8→h2, ≥1.35→h3, else h4) — never h1, and real
+// <h*>/[role=heading] are never touched or re-levelled: their semantics win, we
+// only ADD structure the page painted (rule #1: nothing removed or rewritten).
+// extract.mjs converts the marker to ##/###/#### and has a Node twin of this
+// heuristic for inline styles (static path) — keep the two in sync.
+export function markVisualHeadings() {
+  const marked = [];
+  if (!document.body) return marked;
+  // Clear stale markers first (same defensive pattern as data-sagecrawl-id).
+  for (const el of document.querySelectorAll('[data-sagecrawl-heading]')) {
+    el.removeAttribute('data-sagecrawl-heading');
+  }
+  const norm = (t) => (t || '').replace(/\s+/g, ' ').trim();
+  const styleCache = new Map();
+  const styleOf = (el) => {
+    let s = styleCache.get(el);
+    if (!s) {
+      const cs = getComputedStyle(el);
+      s = {
+        size: parseFloat(cs.fontSize) || 0,
+        weight: parseInt(cs.fontWeight, 10) || 400,
+        display: cs.display,
+      };
+      styleCache.set(el, s);
+    }
+    return s;
+  };
+  const SKIP_TAGS = { SCRIPT: 1, STYLE: 1, TEMPLATE: 1, NOSCRIPT: 1 };
+  // Text metrics of a subtree (optionally excluding one branch): VISIBLE text
+  // only, char-weighted size histogram + extremes. Budgeted — titles are tiny,
+  // and the ancestor scans below break as soon as they have enough chars.
+  const statsOf = (root, excl) => {
+    const st = { chars: 0, bySize: new Map(), maxSize: 0, minSize: Infinity, maxWeight: 0 };
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n;
+    let visits = 0;
+    while ((n = w.nextNode()) && visits++ < 400) {
+      const el = n.parentElement;
+      if (!el || SKIP_TAGS[el.tagName]) continue;
+      if (excl && excl.contains(n)) continue;
+      const t = norm(n.nodeValue);
+      if (!t) continue;
+      if (!el.getClientRects().length) continue; // display:none text doesn't vote
+      const s = styleOf(el);
+      if (!s.size) continue;
+      const key = Math.round(s.size * 2) / 2;
+      st.chars += t.length;
+      st.bySize.set(key, (st.bySize.get(key) || 0) + t.length);
+      if (key > st.maxSize) st.maxSize = key;
+      if (key < st.minSize) st.minSize = key;
+      if (s.weight > st.maxWeight) st.maxWeight = s.weight;
+    }
+    return st;
+  };
+  const dominant = (bySize, fallback) => {
+    let best = fallback;
+    let chars = 0;
+    for (const e of bySize) {
+      if (e[1] > chars) {
+        chars = e[1];
+        best = e[0];
+      }
+    }
+    return best;
+  };
+
+  // ONE pass over the page's text: the char-weighted font histogram (its mode
+  // is the page BODY font) and, per text line, the block that owns it (the
+  // candidate set — nearest non-inline ancestor, so a big <span> inside a
+  // wrapper <div> still surfaces the wrapper as the title block).
+  const pageSizes = new Map();
+  const blocks = [];
+  const seenBlocks = new Set();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  let visits = 0;
+  while ((node = walker.nextNode()) && visits++ < 20000) {
+    const el = node.parentElement;
+    if (!el || SKIP_TAGS[el.tagName]) continue;
+    const t = norm(node.nodeValue);
+    if (t.length < 2) continue;
+    if (!el.getClientRects().length) continue;
+    const s = styleOf(el);
+    if (!s.size) continue;
+    const key = Math.round(s.size * 2) / 2;
+    pageSizes.set(key, (pageSizes.get(key) || 0) + t.length);
+    let b = el;
+    while (b && b !== document.body && styleOf(b).display === 'inline') b = b.parentElement;
+    if (b && b !== document.body && !seenBlocks.has(b)) {
+      seenBlocks.add(b);
+      blocks.push(b); // document order — outer titles mark before inner dupes
+    }
+  }
+  const body = dominant(pageSizes, 16);
+
+  // Never a heading: interactive/label surfaces, cells, list items (#25), code,
+  // real headings — and anything under an already-marked title (no nesting).
+  const BANNED =
+    'a,button,h1,h2,h3,h4,h5,h6,table,th,td,li,ul,ol,dl,pre,code,kbd,samp,label,select,option,textarea,input,summary,figcaption,blockquote,nav,aside,footer,[role=heading],[role=button],[role=tab],[role=list],[role=listitem],[data-sagecrawl-heading]';
+  const STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea';
+  for (const el of blocks) {
+    const text = norm(el.textContent);
+    if (text.length < 2 || text.length > 60) continue; // a title is one short line
+    if (!/\p{L}/u.test(text)) continue; // bare numbers/prices are data, not titles
+    if (el.closest(BANNED)) continue;
+    if (el.querySelector(STRUCTURAL)) continue;
+    // Repeated same-shape siblings are DATA ROWS (#25 renders them as bullets),
+    // never titles: a transaction row with a bold name must not become an h4.
+    // Same shape signal as extract's shapedRowItem: tag + first class token.
+    const cls0 = ((el.getAttribute('class') || '').split(/\s+/)[0] || '');
+    if (cls0 && el.parentElement) {
+      let alike = 0;
+      for (const sib of el.parentElement.children) {
+        if (
+          sib.tagName === el.tagName &&
+          (((sib.getAttribute('class') || '').split(/\s+/)[0]) || '') === cls0
+        ) alike++;
+      }
+      if (alike >= 3) continue;
+    }
+    const st = statsOf(el);
+    if (!st.chars || st.maxSize < body) continue; // never smaller than the page body font
+    if (st.minSize < 0.75 * st.maxSize) continue; // mixed sizes = composite (stat value + caption), not a title
+    // LOCAL body font: the dominant size of the SURROUNDING text (nearest
+    // ancestor with enough of it) — a block that is ALL large text (a hero)
+    // must not promote its own lines.
+    let local = body;
+    let anc = el.parentElement;
+    for (let hops = 0; anc && anc !== document.documentElement && hops < 6; hops++, anc = anc.parentElement) {
+      const around = statsOf(anc, el);
+      if (around.chars >= 40) {
+        local = dominant(around.bySize, body);
+        break;
+      }
+    }
+    const jump = st.maxSize >= 1.15 * local || (st.maxWeight >= 600 && st.maxSize >= local);
+    if (!jump) continue;
+    const ratio = st.maxSize / body;
+    const level = ratio >= 1.8 ? 2 : ratio >= 1.35 ? 3 : 4;
+    el.setAttribute('data-sagecrawl-heading', String(level));
+    marked.push(el);
+  }
+  return marked;
 }
 
 function fingerprintOf(data) {

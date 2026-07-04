@@ -41,21 +41,23 @@ export const DEFAULT_OPTIONS = {
   // kept whole (no section scoping) and EVERY in-scope link is followed (no link gate).
   // Costs no tokens and needs no model; trade-off: the output is not task-filtered and
   // a large site may take LONGER overall (the AI link gate is what keeps a crawl small).
-  // Pair with include/exclude, minRelevance or maxPages to contain it. The task still
-  // matters deterministically: docs detection, best-first frontier ordering, route budget.
+  // Pair with include/exclude or maxPages to contain it. #23 — the task has NO role
+  // here (rule #6 to its end: the task speaks only to the AI, and there is no AI): an
+  // explicit task — or minRelevance, which reads it — is refused loudly, the default
+  // task is dropped, and output files are named from the site instead.
   // Incompatible with mode 'targeted' (task-filtering IS the AI) — refused loudly.
-  mode: 'auto', // #20 — WHAT to extract, as an EXPLICIT choice (free text never drives
-  // the engine — rule #6):
-  //   'complete': everything reachable — completeness shortcuts (llms-full.txt /
+  mode: 'complete', // #20/#23 — WHAT to extract, as an EXPLICIT choice (free text never
+  // drives the engine — rule #6):
+  //   'complete' (default): everything reachable — completeness shortcuts (llms-full.txt /
   //     sitemap) always tried, pages kept WHOLE, and ZERO link-gate/scoping calls
   //     even with AI on (keep/drop is meaningless when the user asked for all; the
   //     default-on mirror dedup contains follow-everything). AI still drives
   //     reveal + nav-plan. Works with or without noAi.
   //   'targeted': only what the task asks — AI link gate + per-page section scoping,
   //     whatever language/wording the task uses. Requires AI (noAi is refused).
-  //   'auto' (default): the historical behaviour — a multilingual regex on the task
-  //     (isDocsTask) picks the docs path. Kept ONLY for backward compatibility with
-  //     existing callers and saved/resumed runs; the UI always sends an explicit mode.
+  //   'auto': the historical behaviour — a multilingual regex on the task (isDocsTask)
+  //     picks the docs path. NEVER the default anymore (#23): kept ONLY for saved runs
+  //     and callers that ask for it by name; the CLI and UI never send it.
   ollamaHost: undefined, // override the Ollama server URL (default: http://127.0.0.1:11434)
   baseUrl: undefined, // OpenAI-compatible API base URL (provider 'openai')
   apiKey: undefined, // API key (provider 'openai'); falls back to SAGECRAWL_API_KEY / OPENAI_API_KEY
@@ -207,6 +209,32 @@ export function crawlDocs(targets, options = {}) {
         'enable AI.',
     );
   }
+  // #23 — with noAi the task has NO role at all (rule #6 to its end: the task speaks
+  // only to the AI, and there is no AI). Accepting one would let free text silently
+  // steer link ordering and file naming — exactly the invisible behaviour rule #6
+  // forbids — so an explicit task is refused loudly, and so is minRelevance (its
+  // score IS task-relevance). Resumed runs are exempt (their saved options may
+  // predate this contract); their tasks are stripped below instead.
+  if (opts.noAi && !opts.__resume) {
+    const explicitTask =
+      options.task !== undefined ||
+      (Array.isArray(targets) ? targets : [targets]).some(
+        (t) => t && typeof t === 'object' && t.task,
+      );
+    if (explicitTask) {
+      throw new Error(
+        'noAi means zero model calls — and the task speaks only to the model, so it can have ' +
+          'no effect. Remove the task (output files are named from the site), or enable AI.',
+      );
+    }
+    if (Number(opts.minRelevance) > 0) {
+      throw new Error(
+        'minRelevance scores links against the task, and with noAi the task has no role. ' +
+          'Remove it — contain the crawl with include/exclude or maxPages instead.',
+      );
+    }
+  }
+  if (opts.noAi) opts.task = ''; // #23 — even the default task: no role means none
   opts.concurrency = Math.max(1, Number(opts.concurrency) || 1);
   opts.delay = Math.max(0, Number(opts.delay) || 0);
   opts.maxPages = Math.max(0, Number(opts.maxPages) || 0);
@@ -262,6 +290,9 @@ export function crawlDocs(targets, options = {}) {
   };
 
   const list = normalizeTargets(targets, opts.task);
+  // #23 — under noAi even per-target tasks carried by a RESUMED run (saved before
+  // this contract) are stripped: the task must have no role, on every path.
+  if (opts.noAi) for (const t of list) t.task = '';
   const stream = createEventStream();
   const startTime = Date.now();
 
