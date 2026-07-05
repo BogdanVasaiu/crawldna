@@ -221,6 +221,67 @@ test('no-AI covers a chrome view-switcher too, but clicks the content control fi
   assert.ok(out.markdown.includes('Vista di nav'), 'the chrome reveal is captured');
 });
 
+// --- speed: cross-page chrome futility (measured, universal, re-verifying) -----
+
+test('cross-page: an inert CHROME control is sampled down site-wide; a productive one and content controls are not', async () => {
+  const scan = {}; // the per-SCAN host, SHARED across pages (like ctx.currentScan)
+  const clicks = { chromeInert: 0, chromeProd: 0, contentInert: 0 };
+  const events = [];
+  const ctx = { currentScan: scan, options: { llm: NONE, maxActions: 25 }, emit: (e) => events.push(e), shouldStop: () => false };
+
+  const runPage = async () => {
+    const model = {
+      paragraphs: ['Base page intro: enough visible body text to stand as a content block here.'],
+      residual: 0,
+      scrollHeight: () => 1000,
+      perceive() {
+        return pagePerception(model, [
+          rev(1, { label: 'Tema', chrome: true }), // chrome, ALWAYS inert (a theme toggle)
+          rev(2, { label: 'Novita', chrome: true }), // chrome, but reveals content every page
+          rev(3, { label: 'Sezione', chrome: false }), // CONTENT control, inert
+        ]);
+      },
+      html: () => htmlOf(model),
+      click(id) {
+        if (id === 1) clicks.chromeInert++; // adds nothing
+        if (id === 2) {
+          clicks.chromeProd++;
+          model.paragraphs.push('Revealed body block from the productive control on this page.');
+        }
+        if (id === 3) clicks.contentInert++; // adds nothing
+      },
+    };
+    await revealAll(makePage(model), ctx, 'https://fake.site/page', 'estrai tutto');
+  };
+
+  for (let i = 0; i < 10; i++) await runPage();
+
+  // Inert chrome: measured on the first pages, then clicked only on the re-verify
+  // cadence — far fewer than 10, but never zero (it is always re-checked).
+  assert.ok(clicks.chromeInert >= 4, `measured before sampling (was ${clicks.chromeInert})`);
+  assert.ok(clicks.chromeInert < 10, `inert chrome sampled down site-wide (was ${clicks.chromeInert}/10)`);
+  // Productive chrome: adds content every page ⇒ marked productive ⇒ NEVER sampled.
+  assert.equal(clicks.chromeProd, 10, 'a chrome control that reveals content is never sampled — no content lost');
+  // Content controls are outside the mechanism entirely ⇒ precision untouched.
+  assert.equal(clicks.contentInert, 10, 'a non-chrome control is never sampled');
+  assert.ok(events.some((e) => /sampling chrome control site-wide/.test(e.detail || '')), 'sampling is announced');
+});
+
+test('single page never samples (the guard needs cross-page evidence)', async () => {
+  const clicks = [];
+  const model = {
+    paragraphs: ['One page only: nothing hidden, a lone chrome control that reveals nothing.'],
+    residual: 0,
+    scrollHeight: () => 1000,
+    perceive: () => pagePerception(model, [rev(1, { label: 'Tema', chrome: true })]),
+    html: () => htmlOf(model),
+    click: (id) => clicks.push(id),
+  };
+  const events = [];
+  await revealAll(makePage(model), baseCtx(NONE, events), 'https://fake.site/page', 'estrai tutto');
+  assert.deepEqual(clicks, [1], 'a chrome control is always clicked on a fresh scan — sampling needs evidence first');
+});
+
 // --- (b) AI mode: measurement arbitrates the judge ----------------------------
 
 let stubServer;

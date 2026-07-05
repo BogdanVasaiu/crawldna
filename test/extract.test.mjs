@@ -427,6 +427,27 @@ test('visual headings never double-mark (nested markers collapse) and empty head
   assert.ok(!/^#{1,6}[ \t]*$/m.test(markdown), 'no empty heading line survives');
 });
 
+test('single-column stack tables render as bullets, not empty | | rows (inline-API Slots)', () => {
+  const html = `<main><p>Body content long enough to be picked as the main region of this page here.</p>
+    <table><tbody>
+    <tr><td></td></tr><tr><td>bottom</td></tr><tr><td></td></tr>
+    <tr><td>Slot to add content below the table.</td></tr>
+    <tr><td>default</td></tr><tr><td></td></tr><tr><td>The default Vue slot.</td></tr>
+    </tbody></table></main>`;
+  const { markdown } = extractMarkdown(html, { baseUrl: 'https://x.com' });
+  assert.ok(!/^\| \|$/m.test(markdown), 'no empty single-column | | rows');
+  assert.match(markdown, /- bottom/, 'non-empty cells become bullets');
+  assert.match(markdown, /- The default Vue slot\./, 'all data is kept, empty cells dropped');
+});
+
+test('adjacent links get a separating space (a row of buttons stays readable)', () => {
+  const html = `<main><p>Nav row with three glued buttons, plus body text to be the main region here.</p>
+    <div><a href="https://x.com/a">Get Started</a><a href="https://x.com/b">Why?</a><a href="https://x.com/c">FAQ</a></div></main>`;
+  const { markdown } = extractMarkdown(html, { baseUrl: 'https://x.com' });
+  assert.ok(!/\)\[/.test(markdown), 'no two links are glued as )[');
+  assert.match(markdown, /\[Get Started\]\(https:\/\/x\.com\/a\) \[Why\?\]\(https:\/\/x\.com\/b\)/, 'links separated by a space, both whole');
+});
+
 // --- #26: visual headings — the .md keeps the skeleton the page painted -----
 // Node path: inline styles stand in for computed styles (the browser twin in
 // engine/perceive.mjs is verified live, like #25).

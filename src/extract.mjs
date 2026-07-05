@@ -187,10 +187,21 @@ function buildTurndown() {
       const cellText = (r) =>
         Array.prototype.slice.call(r.cells || []).map((c) =>
           (c.textContent || '').replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim());
-      const ncol = Math.max(...rows.map((r) => (r.cells ? r.cells.length : 0)), 1);
+      const rowCells = rows.map(cellText);
+      const ncol = Math.max(...rowCells.map((c) => c.length), 1);
+      // Degenerate SINGLE-COLUMN table — a responsive stack (the inline-API Slots/
+      // Events panels), not tabular data. An empty-header 1-col GFM table is just
+      // `| |` noise (2966 in a live run), so render the non-empty cells as a bullet
+      // list instead: no data lost, no invented pairing, no empty rows.
+      if (ncol <= 1) {
+        const items = rowCells.map((c) => (c[0] || '').trim()).filter(Boolean);
+        return items.length ? '\n\n' + items.map((t) => `- ${t}`).join('\n') + '\n\n' : '';
+      }
+      // Real multi-column key-value table with no heading row → GFM (blank header),
+      // dropping any fully-empty rows.
       const line = (arr) => '| ' + arr.concat(Array(Math.max(0, ncol - arr.length)).fill('')).join(' | ') + ' |';
       const out = [line(Array(ncol).fill('')), line(Array(ncol).fill('---'))];
-      for (const r of rows) out.push(line(cellText(r)));
+      for (const c of rowCells) if (c.some((x) => x)) out.push(line(c));
       return '\n\n' + out.join('\n') + '\n\n';
     },
   });
@@ -580,7 +591,13 @@ function cleanupLines(markdown) {
       out.push(line); // verbatim inside code
       continue;
     }
-    const l = line.replace(/(\S)[ \t]{2,}/g, '$1 ').replace(/[ \t]+$/, '');
+    const l = line
+      .replace(/(\S)[ \t]{2,}/g, '$1 ')
+      // adjacent links `[a](u)[b](u)` render glued; separate them with a space so a
+      // row of buttons is readable (universal — a link-close immediately followed by
+      // a link-open, never inside a fence: this runs only on non-fence lines).
+      .replace(/\]\(([^)]*)\)\[/g, ']($1) [')
+      .replace(/[ \t]+$/, '');
     // toolbar actions rendered as plain standalone lines
     if (toolbarLine.test(l)) continue;
     // orphan link-close artifacts from broken next/prev nav-card markup: a line

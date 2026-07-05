@@ -87,6 +87,33 @@ export async function revealAll(page, ctx, url, task) {
   // controls are never collapsed onto one shared verdict.
   const revealKey = (c) => (c.label && c.label.trim().length >= 2 ? `${c.role}|${c.label.trim()}|${c.kind}` : null);
 
+  // Cross-page CHROME futility (measured · universal · re-verifying). The per-page
+  // shape-muting below RESETS each page, so the site's shared chrome (theme toggle,
+  // nav tabs, search) is re-clicked on EVERY page only to re-measure that it reveals
+  // nothing — on a large site that is ~88% of all clicks, each costing a settle wait.
+  // Carry a per-SCAN, MEASURED tally: a CHROME control (structurally OUTSIDE the main
+  // content, #28 — so never content itself) that added ZERO content on the last
+  // INERT_PAGES pages is SAMPLED DOWN — clicked once every RECHECK pages instead of on
+  // every page. It is re-verified on that cadence and RE-ARMED FOREVER the instant it
+  // EVER adds a block, so no content can be lost (anything that reveals content is
+  // never sampled) and it adapts to any site. Content controls, already-productive
+  // controls and unlabelled chrome (no cross-page key) are never sampled → precision
+  // stays identical; only proven waste is trimmed. The signal is CONTENT (added>0),
+  // NOT state change: a theme swap moves the fingerprint but adds no content, so it is
+  // correctly treated as inert. Keyed by revealKey (role|label|kind), stable per site.
+  const inert = revealHost._revealInert || (revealHost._revealInert = new Map());
+  const pageOrdinal = (revealHost._revealPageNo = (revealHost._revealPageNo || 0) + 1);
+  const INERT_PAGES = 4; // measured-inert pages required before sampling begins
+  const RECHECK = 5; // re-verify a proven-inert chrome control every Nth page
+  const sampledOut = (r) => {
+    if (!r.chrome) return false;
+    const k = revealKey(r);
+    if (!k) return false;
+    const rec = inert.get(k);
+    if (!rec || rec.productive || rec.streak < INERT_PAGES) return false;
+    return pageOrdinal % RECHECK !== 0; // outside the re-verify cadence → skip this page
+  };
+
   const doneLeaf = new Set(); // signatures of leaf/in-place controls already clicked
   const advancing = new Map(); // signature -> { appliedFrom: Set<fp>, uses: number }
   const visited = new Set(); // state fingerprints already captured (cycle guard)
@@ -361,7 +388,8 @@ export async function revealAll(page, ctx, url, task) {
           !doneLeaf.has(r.signature) &&
           !advancing.has(r.signature) &&
           !(navPlan && r.signature === navPlan.directionSig) &&
-          !shapeMuted(r),
+          !shapeMuted(r) &&
+          !sampledOut(r),
       );
     }
 
@@ -441,6 +469,33 @@ export async function revealAll(page, ctx, url, task) {
         : undefined;
     const provenance = next.label ? `${next.kind}:${next.label}` : next.kind;
     const added = await capture(label, provenance, next.top || 0);
+
+    // Cross-page chrome futility tally (CONTENT-only — a state change like a theme
+    // swap doesn't count): added>0 marks the control PRODUCTIVE forever (never sampled
+    // again, precision preserved); an inert chrome click grows its streak toward
+    // sampling. Announced once, when a control first crosses into "sampled site-wide".
+    if (next.chrome) {
+      const ck = revealKey(next);
+      if (ck) {
+        const rec = inert.get(ck) || { streak: 0, productive: false, announced: false };
+        if (added > 0) {
+          rec.productive = true;
+          rec.streak = 0;
+        } else if (!rec.productive) {
+          rec.streak++;
+          if (rec.streak === INERT_PAGES && !rec.announced) {
+            rec.announced = true;
+            ctx.emit({
+              type: 'action',
+              url,
+              action: 'skip',
+              detail: `sampling chrome control site-wide — added no content on ${INERT_PAGES} pages (${next.label || '(unlabelled)'})`,
+            });
+          }
+        }
+        inert.set(ck, rec);
+      }
+    }
 
     // Classify the effect by comparing siblings + state fingerprint before/after.
     const after = await perceive(page);
