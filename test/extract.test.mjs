@@ -388,6 +388,45 @@ test('states() drops the whole record when every capture is identical (thin page
   assert.equal(acc.states().length, 1, 'all six captures are one content state — gate (>1) yields no file');
 });
 
+// --- output-fidelity fixes (2026-07-05 audit of the live Vuetify run) --------
+
+test('block-wrapping links stay whole [text](url) — no orphaned ](url)[ fragments (#1)', () => {
+  // A badge/card wrapped in <a> made Turndown emit `[\n\ntext\n\n](url)`, splitting
+  // into an orphaned `](url)[` (585 in the live run). The link must stay whole.
+  const html = `<main><h1>Carousels</h1><div>
+    <a href="https://github.com/vuetifyjs/vuetify/labels/x"><div>Open issues</div><span>12</span></a>
+    <a href="https://github.com/vuetifyjs/vuetify"><div>View on GitHub</div></a>
+  </div></main>`;
+  const { markdown } = extractMarkdown(html, { baseUrl: 'https://vuetifyjs.com/en/components/carousels' });
+  assert.ok(!/^\s*\]\(/m.test(markdown), 'no line starts with an orphaned ](url)');
+  assert.match(markdown, /\[Open issues 12\]\(https:\/\/github\.com\/vuetifyjs\/vuetify\/labels\/x\)/, 'first link whole, URL kept');
+  assert.match(markdown, /\[View on GitHub\]\(https:\/\/github\.com\/vuetifyjs\/vuetify\)/, 'second link whole, URL kept');
+});
+
+test('header-less key-value tables become GFM; proper tables stay GFM (#3)', () => {
+  const html = `<main><p>Enough ordinary body text to be chosen as the main content region of this page here.</p>
+    <table><tbody><tr><th>DPI:</th><td>16000</td></tr><tr><th>Price:</th><td>$149.99</td></tr></tbody></table></main>`;
+  const { markdown } = extractMarkdown(html, { baseUrl: 'https://x.com' });
+  assert.ok(!/<table/i.test(markdown), 'no raw <table> HTML leaks into the .md');
+  assert.match(markdown, /\| DPI: \| 16000 \|/, 'key/value row rendered as a GFM cell pair');
+  const proper = `<main><p>Body content long enough to be the main region for the picker to choose here.</p>
+    <table><thead><tr><th>name</th><th>type</th></tr></thead><tbody><tr><td>color</td><td>string</td></tr></tbody></table></main>`;
+  const md2 = extractMarkdown(proper, { baseUrl: 'https://x.com' }).markdown;
+  assert.match(md2, /\| name \| type \|/, 'a proper table keeps its real header via the gfm plugin');
+});
+
+test('visual headings never double-mark (nested markers collapse) and empty headings drop (#2)', () => {
+  // What the browser twin can stamp: an outer marked title CONTAINING an inner one.
+  // The output must be a SINGLE clean heading, never `#### #### …`.
+  const nested = `<main><p>Plenty of ordinary body text here so the picker chooses this as the main content region of the page.</p>
+    <div data-sagecrawl-heading="4"><div data-sagecrawl-heading="3">Logitech G Pro X</div></div>
+    <h2>   </h2><p>After.</p></main>`;
+  const { markdown } = extractMarkdown(nested, { baseUrl: 'https://x.com' });
+  assert.ok(!/#{2,6}\s+#{2,6}/.test(markdown), 'no doubled heading markers');
+  assert.match(markdown, /(^|\n)#{3,4} Logitech G Pro X(\n|$)/, 'the title is a single clean heading');
+  assert.ok(!/^#{1,6}[ \t]*$/m.test(markdown), 'no empty heading line survives');
+});
+
 // --- #26: visual headings — the .md keeps the skeleton the page painted -----
 // Node path: inline styles stand in for computed styles (the browser twin in
 // engine/perceive.mjs is verified live, like #25).

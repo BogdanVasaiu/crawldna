@@ -535,7 +535,11 @@ export function markVisualHeadings() {
   // real headings — and anything under an already-marked title (no nesting).
   const BANNED =
     'a,button,h1,h2,h3,h4,h5,h6,table,th,td,li,ul,ol,dl,pre,code,kbd,samp,label,select,option,textarea,input,summary,figcaption,blockquote,nav,aside,footer,[role=heading],[role=button],[role=tab],[role=list],[role=listitem],[data-sagecrawl-heading]';
-  const STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea';
+  // [data-sagecrawl-heading]: an element already CONTAINING a marked title is not
+  // itself marked — blocks marked pairs nesting into `#### #### …`. Marking here is
+  // inner-first (document order of the first text node), so the outer, evaluated
+  // later, sees the inner marker and skips.
+  const STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea,[data-sagecrawl-heading]';
   for (const el of blocks) {
     const text = norm(el.textContent);
     if (text.length < 2 || text.length > 60) continue; // a title is one short line

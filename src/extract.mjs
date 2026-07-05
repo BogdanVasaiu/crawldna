@@ -143,10 +143,55 @@ function buildTurndown() {
     filter: (node) =>
       /^[2-6]$/.test((node.getAttribute && node.getAttribute('data-sagecrawl-heading')) || ''),
     replacement: (content, node) => {
-      const text = String(content || '').replace(/\s*\n+\s*/g, ' ').trim();
+      // Strip a LEADING heading marker the flattened content may carry from a
+      // marked child (defensive: the twins already refuse to mark an element that
+      // contains a marked descendant, so nesting shouldn't reach here) — never a
+      // doubled `#### #### …`.
+      const text = String(content || '').replace(/\s*\n+\s*/g, ' ').trim().replace(/^#{1,6}\s+/, '');
       if (!text) return '';
       const level = parseInt(node.getAttribute('data-sagecrawl-heading'), 10);
       return '\n\n' + '#'.repeat(level) + ' ' + text + '\n\n';
+    },
+  });
+
+  // A hyperlink whose content is BLOCK-level (a card/badge wrapped in <a>) makes
+  // Turndown's default rule emit `[\n\ntext\n\n](url)`, which splits across blank
+  // lines into an orphaned `](url)[` fragment (the anchor text stranded, the URL
+  // dangling) — 585 of them in a live Vuetify run. Flatten the link text to ONE
+  // line so a block-wrapping link stays a valid, whole `[text](url)`; the URL is
+  // never lost. Normal inline links are unchanged (their content has no newlines).
+  td.addRule('inlineLinkFlat', {
+    filter: (node) => node.nodeName === 'A' && !!(node.getAttribute && node.getAttribute('href')),
+    replacement: (content, node) => {
+      const text = String(content || '').replace(/\s*\n+\s*/g, ' ').replace(/[ \t]{2,}/g, ' ').trim();
+      if (!text) return ''; // empty/permalink anchors drop (matches the later cleanup)
+      const href = node.getAttribute('href');
+      const title = node.title ? ` "${node.title.replace(/"/g, '')}"` : '';
+      return `[${text}](${href}${title})`;
+    },
+  });
+
+  // Key-value tables (each row is `<th>label</th><td>value</td>`, no heading row)
+  // are left as RAW HTML by the gfm plugin (it only converts tables with a heading
+  // row), leaking `<table>…</table>` into the .md. Convert a header-less table to a
+  // GFM table (synthesised blank header) so the data stays readable and consistent;
+  // PROPER tables (first row all-<th>) fall through to the gfm plugin untouched.
+  const isHeadingRow = (row) =>
+    row && row.childNodes && Array.prototype.some.call(row.childNodes, (c) => c.nodeName === 'TH') &&
+    Array.prototype.every.call(row.childNodes, (c) => c.nodeType !== 1 || c.nodeName === 'TH');
+  td.addRule('headerlessTable', {
+    filter: (node) => node.nodeName === 'TABLE' && !(node.rows && node.rows[0] && isHeadingRow(node.rows[0])),
+    replacement: (_content, node) => {
+      const rows = Array.prototype.slice.call(node.rows || []);
+      if (!rows.length) return '';
+      const cellText = (r) =>
+        Array.prototype.slice.call(r.cells || []).map((c) =>
+          (c.textContent || '').replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim());
+      const ncol = Math.max(...rows.map((r) => (r.cells ? r.cells.length : 0)), 1);
+      const line = (arr) => '| ' + arr.concat(Array(Math.max(0, ncol - arr.length)).fill('')).join(' | ') + ' |';
+      const out = [line(Array(ncol).fill('')), line(Array(ncol).fill('---'))];
+      for (const r of rows) out.push(line(cellText(r)));
+      return '\n\n' + out.join('\n') + '\n\n';
     },
   });
 
@@ -345,7 +390,11 @@ function headingBannedAt(el) {
   return false;
 }
 
-const HEADING_STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea';
+// Includes [data-sagecrawl-heading]: an element that already CONTAINS a marked
+// title must not itself be marked, else the outer rule wraps the inner marker into
+// `#### #### …` (and mashes title+subtitle onto one line). Marking runs inner-first
+// on the browser twin, so this is what actually blocks the nesting.
+const HEADING_STRUCTURAL = 'h1,h2,h3,h4,h5,h6,table,ul,ol,pre,blockquote,button,a,input,select,textarea,[data-sagecrawl-heading]';
 
 /** Is `el` (or one of its near ancestors) a row that gets flattened to a bullet?
  *  If so, a heading marker planted here would collapse into the bullet. */
@@ -535,8 +584,12 @@ function cleanupLines(markdown) {
     // toolbar actions rendered as plain standalone lines
     if (toolbarLine.test(l)) continue;
     // orphan link-close artifacts from broken next/prev nav-card markup: a line
-    // that is only `](url)` with no opening bracket.
-    if (/^[ \t]*\]\([^)]*\)[ \t]*$/.test(l)) continue;
+    // that is only `](url)` (optionally with a dangling `[` from the next link) and
+    // no opening bracket. The inlineLinkFlat turndown rule prevents these at source;
+    // this stays as a net for any that arrive from other paths.
+    if (/^[ \t]*\]\([^)]*\)\[?[ \t]*$/.test(l)) continue;
+    // empty heading: a `#`..`######` with no text (an emptied <h*> / stripped title).
+    if (/^#{1,6}[ \t]*$/.test(l)) continue;
     // orphan punctuation from a card whose image/body was removed: a line that is
     // only `[`, `]` or `!` is never meaningful Markdown outside a fence.
     if (/^[[\]!]$/.test(l.trim())) continue;
