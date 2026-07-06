@@ -33,24 +33,41 @@ It runs three ways from a single headless core:
 
 ## Install
 
-Standalone:
+**As a CLI** — install globally so the `crawldna` command is on your PATH:
 
 ```sh
-git clone https://github.com/BogdanVasaiu/crawlDNA
-cd crawlDNA
-npm install
-node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation"
+npm install -g crawldna
+crawldna https://docusaurus.io/docs --task "Extract all documentation" --model qwen3-coder:30b
 ```
 
-As a library:
+Or run it once, without installing anything:
+
+```sh
+npx crawldna https://docusaurus.io/docs --task "Extract all documentation" --model qwen3-coder:30b
+```
+
+**As a library:**
 
 ```sh
 npm install crawldna
 ```
 
+**From source** — the only install that also includes the optional Web UI:
+
+```sh
+git clone https://github.com/BogdanVasaiu/crawlDNA
+cd crawlDNA
+npm install
+node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation" --model qwen3-coder:30b
+```
+
 The npm package is just the crawler core + CLI — the Web UI is **not** included, so
-it adds no dead weight to your dependency. If you want the UI, use the repo install
+it adds no dead weight to your dependency. If you want the UI, use the source install
 above and run `npm run serve` (see [Web UI](#web-ui)).
+
+> The examples use `--model qwen3-coder:30b` (Ollama). You must choose a model —
+> or pass `--no-ai` for a zero-token crawl with no model at all. See
+> [Requirements](#requirements).
 
 ### Requirements
 
@@ -242,6 +259,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `maxPages` | `0` | safety cap (0 = unlimited) |
 | `maxActions` | `40` | per-page reveal action cap (a ceiling — simple pages stop early) |
 | `maxRoutes` | `200` | cap on speculative JS-mined route candidates sent to the AI link gate, top-ranked by task relevance (`0` = unlimited; only cuts when the scores discriminate; real DOM links are never capped) |
+| `minRelevance` | `0` | focus on task: skip links scoring below this task-relevance (`0`..`1`; `0` = off, never drops). Only cuts when the task **discriminates** among a page's links — a generic task never over-prunes. Reads the task, so **refused with `noAi`** |
 | `include` | — | only crawl URLs matching (string regex or `RegExp`) |
 | `exclude` | — | skip URLs matching |
 | `delay` | `0` | politeness (opt-in): minimum ms between requests to the **same host** — parallel workers queue behind each other per host. `0` = off |
@@ -251,6 +269,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
 | `perDocument` | `false` | also package one identifiable `.md` per page (+ `index.md` + `documents.jsonl`) for programmatic use, alongside the consolidated `.md`. Verbatim — see [Output](#output) |
 | `mirrorHamming` | `8` | collapse mirror/variant re-servings of a kept page: dropped only when the URL is a **sibling** (same locale-stripped path — mirror hosts like `dev.`/`v2.`, UI-state query variants, `/en/x` vs `/x` locale twins) **and** the content SimHash is within the distance. Sibling-shaped pages with real differences (`?version=A` vs `B`) measure far apart and are kept. Links on a dropped duplicate are not followed, so mirror cascades stop at their first page. `0` = off |
 | `nearDupHamming` | `0` | collapse near-duplicate pages **across different paths** within this SimHash Hamming distance (`0` = off). **Opt-in** — content similarity alone can't tell a duplicate from a sibling (templated API pages measure ≤3 apart), so this can drop a real page |
+| `incremental` | `false` | re-crawl only what changed: reuse pages whose sitemap `<lastmod>` (or an HTTP `304`) is unchanged since the last `incremental` run of the same target, skipping render + reveal. **Conservative** — any doubt re-crawls, so a change is never skipped. Implies saving; the first run establishes the baseline. See [Incremental re-crawl](#incremental-re-crawl-opt-in) |
 | `onEvent` | — | `(ev) => void` callback |
 
 ### Result
@@ -267,7 +286,7 @@ Array<{ url, task? }>                  // many targets, each with its own task
   stats: {
     pages, durationMs,
     strategyCounts: { 'docs:llms-full', 'docs:sitemap', agent },
-    tokens: { calls, inputTokens, outputTokens, byKind: { reveal, scope, links, 'nav-plan', … } },  // AI cost, split by call type
+    tokens: { calls, inputTokens, outputTokens, cachedInputTokens, byKind: { reveal, scope, links, 'nav-plan', … } },  // AI cost, split by call type
     revealResidual: { pages, chars },  // reveal exit audit: kept pages that ended with text still hidden
   },
   warnings: [ { url?, reason, message } ],

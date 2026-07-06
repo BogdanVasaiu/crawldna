@@ -142,6 +142,14 @@ export interface CrawlOptions {
    * `0` = off.
    */
   mirrorHamming?: number;
+  /**
+   * Incremental re-crawl (opt-in). On a re-crawl of the same target, reuse pages whose
+   * sitemap `<lastmod>` — or an HTTP `304` on a static-safe page — is unchanged since the
+   * last `incremental` run, skipping render + reveal, and re-crawl only what changed.
+   * Conservative: any doubt re-crawls, so a change is never missed. Implies saving; the
+   * first run establishes the baseline. Default `false`.
+   */
+  incremental?: boolean;
   /** Called for every event, in addition to the async iterator. */
   onEvent?: (event: CrawlEvent) => void;
 }
@@ -154,6 +162,7 @@ export type EventType =
   | 'action'
   | 'extracted'
   | 'dedup'
+  | 'incremental'
   | 'resume'
   | 'progress'
   | 'warn'
