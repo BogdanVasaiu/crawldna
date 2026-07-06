@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // isDocsTask (item #3) — the multilingual docs-intent backstop that picks the docs
 // profile (sitemap/llms-full) and keeps pages whole.
 import { test } from 'node:test';

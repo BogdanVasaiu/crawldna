@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #6 — incremental re-crawl: decide which baseline pages are still FRESH.
 //
 // The crawl itself is unchanged; this module only partitions a prior run's pages

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #6 — incremental re-crawl, end-to-end and fully offline (a local stub site with a
 // mutable sitemap, no browser, no model). Acceptance criteria from TODO.md:
 //   - a second crawl of the same site reuses pages whose <lastmod> is unchanged

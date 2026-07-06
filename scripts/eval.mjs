@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The measurement RUNNER (TODO.md #12). Crawls one or more GOLDEN SPECS and prints the
 // scored report (reveal completeness, sitemap coverage, task recall/precision, tokens
 // per call type). This is the piece that needs a real model + browser, so it lives in

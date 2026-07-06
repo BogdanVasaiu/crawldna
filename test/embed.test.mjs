@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #22 — the semantic relevance tier, fully offline (a local OpenAI-compatible
 // stub serves both /embeddings and /chat/completions; no model, no browser).
 // The acceptance criteria from TODO.md:

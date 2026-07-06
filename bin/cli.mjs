@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // crawldna CLI — a thin face over the core (§7). All logic lives in src/index.mjs.
 
 import { parseArgs } from 'node:util';

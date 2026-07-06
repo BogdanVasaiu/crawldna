@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // resolveLlm — the provider descriptor every AI call is routed by. No network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

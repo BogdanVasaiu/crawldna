@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #14 — anti-bot / challenge-page detection. ALWAYS ON: this is a PRECISION
 // guard, not a courtesy — when a site's defense serves a "checking your
 // browser" interstitial or a CAPTCHA wall (often with HTTP 200), keeping it

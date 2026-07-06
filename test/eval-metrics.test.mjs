@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Measurement primitives (#12) — pure scoring, no crawl involved.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

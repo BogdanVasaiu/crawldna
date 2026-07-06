@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The OpenAI-compatible transport's #4 prompt-caching pieces: cached-token metering
 // (OpenAI and DeepSeek report shapes) and the cache_control system block, which only
 // OpenRouter receives. Local stub server — no external network.

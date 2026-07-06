@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The measurement primitives for step #12 of TODO.md — the "measurement harness".
 //
 // These turn the project's promises ("nothing hidden is missed", "the output is

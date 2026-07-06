@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #6 slice 3 — the hash-net, fully offline. The stub site has NO sitemap and sends
 // NO validators, so every page is always re-crawled (nothing can be skipped). The
 // hash-net's only job is to report the TRUTH: of the pages we had to re-crawl, how

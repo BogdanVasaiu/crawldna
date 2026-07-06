@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The LLM transport layer — the ONE place that talks to a model provider.
 //
 // crawldna's judgment layer (src/engine/decide.mjs) and reshape (src/reshape.mjs)

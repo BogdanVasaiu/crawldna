@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Faithfulness verification for reshape output (#11). The reshape step is the ONLY
 // place the AI may reformat content — and therefore the only place it could ALTER or
 // INVENT a value. The prompt already demands "value-faithful", but a prompt is a

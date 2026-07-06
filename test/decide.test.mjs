@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The AI judgment layer, exercised end-to-end through the real transport (llm.mjs)
 // against a local OpenAI-compatible stub — no model, no browser, no external network.
 // Covers the completeness-bias contracts: what happens on a deliberate empty verdict,

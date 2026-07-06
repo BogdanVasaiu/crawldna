@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #21a — consent/overlay dismissal: the DECISION, kept pure and testable.
 //
 // perceive() MEASURES (a visible button-like element inside a true overlay —

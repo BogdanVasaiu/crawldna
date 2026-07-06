@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // SimHash near-duplicate fingerprint (item #7) — the opt-in nearDupHamming gate rests
 // on these properties: identical=0, small edit=small distance, unrelated=far.
 import { test } from 'node:test';

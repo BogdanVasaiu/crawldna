@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Output layout (Phase 1) — assemble a scan's crawled pages into its .md file.
 //
 // The two-phase model (set by the product): the CRAWL produces a faithful,

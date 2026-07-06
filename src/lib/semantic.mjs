@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #22 — the semantic relevance tier: embeddings-backed task→link scoring.
 //
 // The lexical scorer (lib/relevance.mjs) is fast, free and deterministic, but

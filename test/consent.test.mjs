@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #21a — the consent decision (engine/consent.mjs), pure and offline. The
 // acceptance criterion from TODO.md: NON-ENGLISH banners get closed (fixture
 // battery below), reject is preferred over accept, and a non-consent overlay

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // crawldna — public API + core orchestration.
 //
 // crawlDocs(targets, options) returns a `run` that is:

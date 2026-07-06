@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Tier 2 of the documentation profile: sitemap enumeration.
 //
 // Follows sitemap indexes recursively, collects every <loc>, and also reads

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Task→link relevance scoring (item #1) — ordering/pruning signal for the frontier.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

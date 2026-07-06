@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Run cache (§9): every crawl is saved, whether or not the caller asked for it.
 //
 // A run is one folder under the cache root. Each submitted link is an

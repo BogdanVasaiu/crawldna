@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // URL normalisation, scoping and slugs — the dedup/frontier foundation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

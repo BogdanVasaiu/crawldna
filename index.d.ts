@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Type definitions for crawldna — the public API of `src/index.mjs`.
 // Hand-written (the source is plain ESM JavaScript). Kept in sync with
 // DEFAULT_OPTIONS and the `crawlDocs` result shape documented in README.md.

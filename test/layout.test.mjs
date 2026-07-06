@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Output assembly: the consolidated verbatim .md (Phase 1) and the opt-in
 // per-document packaging (#10) — union of bodies must equal the kept pages.
 import { test } from 'node:test';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #20 — the explicit `mode` option (complete / targeted / auto), fully offline
 // (local stub site + local OpenAI-compatible stub; no browser, no model, no
 // external network). The acceptance criteria from TODO.md:

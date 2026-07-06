@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The render-wait signal (#15): response-quiet + stable text, bounded.
 // settle() is pure JS over the Playwright page interface, so its semantics —
 // the ones that replace `networkidle` at render time — are provable offline

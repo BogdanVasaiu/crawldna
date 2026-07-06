@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The general per-page engine (§3): browser-first render -> exhaustive reveal of
 // hidden/dynamic content -> task-scoped verbatim extraction -> link discovery.
 // Universal: no per-site logic. Whether the AI gates links / scopes sections is

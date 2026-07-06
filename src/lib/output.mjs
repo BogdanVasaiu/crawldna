@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Disk output (§9): a flat bundle of AI-grouped .md files plus a stable
 // manifest.json. The grouping (one file by default, several when the task asks
 // to split) is decided upstream in lib/layout.mjs; this module only writes a

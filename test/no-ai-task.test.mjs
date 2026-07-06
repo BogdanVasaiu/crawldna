@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #23 — with noAi the task has NO role at all (rule #6 to its end: the task
 // speaks only to the AI, and there is no AI). Fully offline. The contract:
 //   - an explicit task (shared option OR per-target) is refused synchronously;

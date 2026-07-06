@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Low-level page actuation via Playwright. Elements are targeted by the
 // `data-crawldna-id` attribute that perceive() stamped on the live DOM.
 // The "wait until the click's effects landed" signal lives in lib/settle.mjs

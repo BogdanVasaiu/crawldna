@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Phase 2 — "reshape" (chat with your extraction).
 //
 // The crawl (Phase 1) produces a faithful, VERBATIM extraction per link. This

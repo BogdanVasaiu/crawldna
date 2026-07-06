@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Context retrieval for reshape (#11, root cause): when the crawled sources exceed
 // the model budget, choose WHICH verbatim slices fill it — instead of blindly sending
 // the first N characters and letting the model "answer" the rest from its own memory

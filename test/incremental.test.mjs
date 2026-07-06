@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #6 — incremental re-crawl: the freshness planner (never skip on uncertainty),
 // sitemap <lastmod> extraction, and target-set matching for baseline discovery.
 import { test } from 'node:test';

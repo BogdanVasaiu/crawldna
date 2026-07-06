@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Lazy Playwright loader. Playwright is an optional dependency: nothing here
 // imports it until a crawl actually needs the browser as an actuator.
 

@@ -494,7 +494,13 @@ Run it before and after any engine change; a live check on a reference site
 
 ## License
 
-[AGPL-3.0-only](LICENSE). Free to use, self-host and modify; if you offer a
-modified version of crawldna to others as a network service, you must release
-your service's source under the same license. Internal/personal use carries no
-such obligation. For a commercial license outside these terms, open an issue.
+crawlDNA © 2026 Bogdan Marian Vasaiu. Licensed under [AGPL-3.0-only](LICENSE):
+free to use, self-host and modify; if you offer a modified version of crawlDNA
+to others as a network service, you must release your service's source under
+the same license. Internal/personal use carries no such obligation. For a
+commercial license outside these terms, open an issue.
+
+The name **crawlDNA**, its logo, and the domain **crawldna.com** are reserved
+(see the Brand Reservation Notice in [LICENSE](LICENSE)) — the AGPL covers the
+software, not the brand. Factual attribution ("based on crawlDNA by Bogdan
+Marian Vasaiu") and links to the official repository are welcome.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #14 — politeness, OPT-IN (the tool stays user-directed, like wget):
 //   - a minimum per-HOST gap between requests (`delay`), reserved-slot style so
 //     concurrent workers queue behind each other instead of bursting;

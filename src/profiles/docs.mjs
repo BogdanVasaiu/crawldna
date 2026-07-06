@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Documentation task profile (§4). For docs the priorities are completeness and
 // precision, so:
 //   1. /llms-full.txt — the publisher's own complete export; use it verbatim.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The render-wait signal (#15): "response-quiet + stable text", bounded.
 // Shared by the initial page render (engine/crawl-page.mjs), the reveal loop's
 // post-click wait and base restore (engine/actions.mjs, engine/reveal.mjs), and

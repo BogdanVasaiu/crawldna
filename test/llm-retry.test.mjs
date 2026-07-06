@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Transient-failure retry in the OpenAI-compatible transport: 429/5xx (and network
 // resets) are ROUTINE on a paid API under a crawl's call volume, and a failed
 // judgment call triggers the "follow/keep everything" completeness fallback — so the

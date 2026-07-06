@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Network layer: plain fetch, with optional escalation to a real browser when
 // a page looks like a JS-rendered shell or the caller forces it.
 

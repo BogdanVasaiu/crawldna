@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Fidelity verification (#11): value-like atoms of a produced file must exist in the
 // crawled sources; inventions are reported, prose rephrasing is not policed.
 import { test } from 'node:test';

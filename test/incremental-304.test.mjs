@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #6 slice 2 — HTTP 304 tier of the incremental re-crawl, fully offline. The stub
 // site has NO sitemap (so the lastmod tier does nothing) but serves ETags and
 // honours If-None-Match. A re-crawl confirms unchanged pages with a conditional GET

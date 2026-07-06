@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #21 b/c/d — the closed-loop reveal, offline: revealAll driven by a FAKE page
 // (settle/perceive/actions are all duck-typed over the page interface, so a
 // scripted state machine stands in for Playwright — no browser, no model, no

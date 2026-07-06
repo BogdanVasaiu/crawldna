@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // 64-bit SimHash (Charikar) — a near-duplicate fingerprint for text. Pure JS, no
 // dependencies. Two documents that differ only in boilerplate/template produce
 // fingerprints a small Hamming distance apart; genuinely different documents are far

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Task classification shared by the orchestrator and the engine.
 
 /** The valid values of the `mode` option (#20). */

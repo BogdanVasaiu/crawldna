@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Behaviour-aware perception. Casts a wide net for anything that could hide
 // content (tabs/accordions/"load more"/JS widgets). It scans the MAIN CONTENT
 // first, then the site chrome (nav/header/footer) for its JS view-switchers — an

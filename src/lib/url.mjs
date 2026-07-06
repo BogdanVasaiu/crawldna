@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // URL helpers: normalise, dedupe, scope. Pure, no dependencies.
 
 /** Coerce a string|RegExp filter into a RegExp (or null). */

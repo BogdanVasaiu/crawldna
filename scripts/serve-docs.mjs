@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Tiny static server for the docs/ landing page — used by the `docs-preview`
 // launch config. Node built-ins only; the root is resolved relative to this
 // file so it works on any clone (no machine-specific paths).

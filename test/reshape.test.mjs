@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // End-to-end reshape (#11) against a real on-disk run and a local OpenAI-compatible
 // stub — a miniature of the live failure: a source far beyond the model budget, a
 // request about content DEEP inside it, and a model that mixes real and invented

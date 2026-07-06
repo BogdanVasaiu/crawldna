@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Tier 1 of the documentation profile: /llms-full.txt.
 //
 // If a site publishes /llms-full.txt it already contains the entire docs set as

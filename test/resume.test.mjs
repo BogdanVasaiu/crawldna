@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Incremental persistence + resume (#13), fully offline (a local stub site, no
 // browser, no model). The acceptance criteria from TODO.md, verbatim:
 //   - a run interrupted mid-crawl leaves its extracted pages on disk, readable;

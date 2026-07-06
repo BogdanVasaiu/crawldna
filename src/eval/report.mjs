@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Assemble the individual metrics (metrics.mjs) into ONE report for a crawl result,
 // and render it as a readable before/after table. Pure: it scores a result + a golden
 // spec that already exist; the runner (scripts/eval.mjs) is what produces them.

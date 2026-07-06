@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #14 — politeness opt-in (delay / robots) + always-on anti-bot detection,
 // fully offline (local stub site, browser 'never', no model). The acceptance
 // criteria from TODO.md:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The public library surface: option defaults and target normalisation.
 // (crawlDocs itself needs a browser + model — covered by the live eval harness, #12.)
 import { test } from 'node:test';

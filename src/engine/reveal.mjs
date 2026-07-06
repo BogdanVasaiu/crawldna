@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // The reveal engine: exhaustively exercise every control that could hide content
 // (tabs, accordions, "load more", menus, JS widgets, paginators) and capture each
 // revealed state until nothing NEW appears. Universal — it does not care how the

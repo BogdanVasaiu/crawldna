@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // #16 — the relevance budget on JS-mined routes. budgetRoutes is pure: rank by
 // scoreLink against the task terms, keep the top N — but ONLY when the scores
 // actually discriminate among the routes (min < max). A generic task (everything

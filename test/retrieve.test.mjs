@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Reshape context retrieval (#11 root cause): when sources exceed the budget, the
 // sections RELEVANT to the instruction are selected — not the blind first N chars.
 import { test } from 'node:test';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Mirror/variant dedup (mirrorHamming, default ON) + frontier feedback, fully
 // offline (a local stub site, no browser, no model). What must hold:
 //   - a locale twin (/docs vs /en/docs) and a UI-state query variant

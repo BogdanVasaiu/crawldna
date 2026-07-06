@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Web UI server (§8): a tiny node:http server, no framework.
 //   GET  /         -> ui/index.html
 //   POST /start    -> { targets, options } -> start a crawl via the core

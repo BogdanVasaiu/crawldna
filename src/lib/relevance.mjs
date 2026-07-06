@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Bogdan Marian Vasaiu
 // Task-relevance scoring for discovered links — the universal, dependency-free core
 // of "information foraging" (focused crawling). Given the user's TASK and a link
 // (its URL + anchor label + nearby heading), it returns how related the link looks to
