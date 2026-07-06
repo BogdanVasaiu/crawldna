@@ -363,6 +363,36 @@ contract is unchanged.
 `saveChatSession` / `writeChatFile` / `readChatFile` — used by the CLI
 `runs`/`resume`/`reshape` subcommands and the Web UI.
 
+### Incremental re-crawl (`incremental: true` / `--incremental`, #6)
+
+Keeping a site fresh shouldn't re-render pages that didn't change. With
+`incremental` on, a re-crawl finds the most recent prior incremental run for the
+same target(s) (`findBaselineRun`) and reuses its journal as a **baseline**, then
+decides page-by-page whether each baseline page is still fresh — reusing the ones
+that are (via the same restore path as resume) and re-crawling only the rest.
+Three freshness tiers, cheapest first:
+
+1. **Sitemap `<lastmod>`** (`sitemapLastmodMap`) — reuse when the stored and current
+   `<lastmod>` are both present and **equal**. Skips the page entirely (no fetch).
+2. **HTTP `304`** (`conditionalGet`) — for the still-stale, **static-safe** pages
+   (single reveal state, zero hidden residual — `isStaticSafe`) that carry an
+   `ETag`/`Last-Modified`, a conditional GET asks the server; a `304` confirms it is
+   byte-for-byte unchanged, so it is reused **without rendering**. A multi-state or
+   residual (JS/click-driven) page is **never** trusted to a shell `304`.
+3. **Content-hash net** — a page that *was* re-crawled but whose normalized content
+   hash matches the baseline is counted as unchanged. This can't save the render; it
+   makes the run's change report **measured, not guessed**.
+
+Every decision is **conservative** (principle: *never lose content*): a page is only
+reused on positive evidence of no change, so any uncertainty re-crawls. The freshness
+metadata (`lastmod`, `httpEtag`, `httpLastModified`, `contentHash`) is stamped into
+each page's `meta` during the crawl (`ctx.addPage`), and an incremental run **keeps
+its journal** on a clean finish (unlike a normal run) so it can be the next baseline.
+The pure decision logic lives in [`src/lib/incremental.mjs`](src/lib/incremental.mjs)
+(`planIncremental`, `isStaticSafe`, `planConditional`); the network 304 checks run
+bounded-parallel in `conditionalReuse`. Progress is reported via `incremental` events
+(`phase: 'baseline' | 'no-baseline' | 'plan' | 'done'`).
+
 ---
 
 ## 10. Documentation profile ([`src/profiles/docs.mjs`](src/profiles/docs.mjs))
@@ -399,6 +429,7 @@ special-casing — the engine is universal.
 | `include` / `exclude` | — | Regex URL scope filters |
 | `save` | `false` | Persist the run to the cache. CLI/UI set this; a library call stays in memory unless set (or a `cacheDir` is given) |
 | `cacheDir` | `<cwd>/.crawldna/runs` | Where to save when saving is on |
+| `incremental` | `false` | Re-crawl only what changed vs the last incremental run — reuse pages whose sitemap `lastmod`/HTTP `304` confirm unchanged, hash-net reports the rest (§9). Conservative; implies saving |
 
 **Models:** the engine relies on the model for tool-quality JSON. `qwen3-coder:30b`
 is reliable for the reveal/link/layout JSON; very small models are not.
@@ -429,6 +460,7 @@ Consumers iterate the run for live progress. Event types:
 
 `site` · `strategy` · `discover` · `page` · `action` (click/expand/follow) ·
 `extracted` · `resume` (pages restored from an interrupted run's journal) ·
+`incremental` (baseline lookup + freshness plan/report, #6) ·
 `progress` · `warn` · `error` · `saved` · `done`.
 
 Each event is stamped with the active `scanId`/`scanIndex` so a UI can route it to

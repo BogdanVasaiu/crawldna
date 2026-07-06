@@ -348,7 +348,7 @@ footer{border-top:1px solid var(--b1);margin-top:24px}
         <h3>Crawl</h3>
         <p>Visits the site page by page, opens the hidden content, extracts verbatim Markdown and
           saves each page the moment it’s captured. A crash loses nothing — <code>resume</code>
-          picks up where it stopped.</p>
+          picks up where it stopped; <code>--incremental</code> re-crawls only what changed.</p>
       </div>
       <div class="card">
         <h3>Reshape</h3>
@@ -448,7 +448,7 @@ footer{border-top:1px solid var(--b1);margin-top:24px}
       <div class="card"><h3>Turndown + heuristics</h3><p>Deterministic HTML→Markdown. Heuristics beat neural models on main content (SIGIR 2023).</p></div>
       <div class="card"><h3>Ollama or OpenAI-compatible</h3><p>One provider layer for chat and embeddings — local model or cloud, same interface.</p></div>
       <div class="card"><h3>64-bit SimHash</h3><p>Content fingerprints collapse mirrors and variants — only alongside URL-shape proof, never on similarity alone.</p></div>
-      <div class="card"><h3>JSONL journal + resume</h3><p>Every page hits disk the moment it’s captured. Crash or Ctrl-C: <code>resume</code> finishes the run.</p></div>
+      <div class="card"><h3>JSONL journal · resume · incremental</h3><p>Every page hits disk the moment it’s captured. Crash or Ctrl-C: <code>resume</code> finishes the run. <code>--incremental</code> re-crawls only what changed since last time.</p></div>
     </div>
   </section>
 
