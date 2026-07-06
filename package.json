@@ -8,10 +8,10 @@
   "homepage": "https://crawldna.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BogdanVasaiu/crawldna.git"
+    "url": "git+https://github.com/BogdanVasaiu/crawlDNA.git"
   },
   "bugs": {
-    "url": "https://github.com/BogdanVasaiu/crawldna/issues"
+    "url": "https://github.com/BogdanVasaiu/crawlDNA/issues"
   },
   "keywords": [
     "crawler",

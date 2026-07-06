@@ -1,6 +1,6 @@
 # crawldna
 
-[![tests](https://github.com/BogdanVasaiu/crawldna/actions/workflows/test.yml/badge.svg)](https://github.com/BogdanVasaiu/crawldna/actions/workflows/test.yml)
+[![tests](https://github.com/BogdanVasaiu/crawlDNA/actions/workflows/test.yml/badge.svg)](https://github.com/BogdanVasaiu/crawlDNA/actions/workflows/test.yml)
 [![license: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 A **general, task-driven web crawler**. Give it one or more links, each with a
@@ -36,8 +36,8 @@ It runs three ways from a single headless core:
 Standalone:
 
 ```sh
-git clone https://github.com/BogdanVasaiu/crawldna
-cd crawldna
+git clone https://github.com/BogdanVasaiu/crawlDNA
+cd crawlDNA
 npm install
 node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation"
 ```
@@ -167,8 +167,8 @@ crawldna runs path            # print the cache directory
 > not the npm package. Run it from a repo clone:
 >
 > ```sh
-> git clone https://github.com/BogdanVasaiu/crawldna
-> cd crawldna && npm install
+> git clone https://github.com/BogdanVasaiu/crawlDNA
+> cd crawlDNA && npm install
 > npm run serve            # or: node bin/cli.mjs serve --port 4000
 > # open http://localhost:4000
 > ```

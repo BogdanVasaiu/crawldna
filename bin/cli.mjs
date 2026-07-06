@@ -569,7 +569,7 @@ async function main() {
           c(C.cyan, '  crawldna <url> --task "…"   --model qwen3-coder:30b\n') +
           c(C.cyan, "  import { crawlDocs } from 'crawldna'\n") +
           '\nTo use the Web UI, run it from the source repository:\n' +
-          c(C.cyan, '  git clone https://github.com/BogdanVasaiu/crawldna && cd crawldna\n') +
+          c(C.cyan, '  git clone https://github.com/BogdanVasaiu/crawlDNA && cd crawlDNA\n') +
           c(C.cyan, '  npm install && npm run serve\n'),
       );
       process.exitCode = 1;
