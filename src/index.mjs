@@ -559,11 +559,22 @@ export function crawlDocs(targets, options = {}) {
         scan.stats.revealResidual.pages += 1;
         scan.stats.revealResidual.chars += residual;
       }
-      // #6 — stamp the page's sitemap <lastmod> (present only on an incremental crawl)
-      // so a future incremental run can tell whether it changed. Purely additive metadata.
-      if (scan._lastmodMap) {
-        const lm = scan._lastmodMap.get(normalizeUrl(page.url) || page.url);
-        if (lm) (page.meta || (page.meta = {})).lastmod = lm;
+      // #6 — on an incremental crawl, stamp the freshness metadata a future run needs
+      // (sitemap <lastmod> + the content hash) — purely additive. Hash-net (slice 3):
+      // a page we HAD to re-crawl (no lastmod/validator) whose content hash matches the
+      // baseline was unchanged after all; count it, so the run reports what TRULY changed
+      // (measured, not guessed) — it can't save the render, only tell the truth about it.
+      if (opts.incremental) {
+        const key = normalizeUrl(page.url) || page.url;
+        page.meta || (page.meta = {});
+        if (scan._lastmodMap) {
+          const lm = scan._lastmodMap.get(key);
+          if (lm) page.meta.lastmod = lm;
+        }
+        page.meta.contentHash = hash;
+        if (scan._baselineHashes && scan._baselineHashes.get(key) === hash && scan.stats.incremental) {
+          scan.stats.incremental.unchangedByHash += 1;
+        }
       }
       // Incremental persistence (#13): the kept page hits the disk NOW, verbatim,
       // append-only — a crash from here on cannot lose it. No-op when saving is off.
@@ -694,6 +705,13 @@ export function crawlDocs(targets, options = {}) {
           }
           scan._lastmodMap = currentLastmod;
           const records = (baselineJournals && baselineJournals[scan.scanId]) || [];
+          // hash-net (slice 3): the baseline content hashes, so a re-crawled page that
+          // turns out identical can be counted as unchanged (measured, not guessed).
+          scan._baselineHashes = new Map();
+          for (const rec of records) {
+            const h = rec.page && rec.page.meta && rec.page.meta.contentHash;
+            if (h) scan._baselineHashes.set(normalizeUrl(rec.page.url) || rec.page.url, h);
+          }
           const { reuse, recrawl } = planIncremental(records, currentLastmod);
           // Second freshness signal: for the still-stale, STATIC-SAFE pages that carry
           // an HTTP validator, ask the server with a conditional GET — a 304 means it
@@ -710,7 +728,7 @@ export function crawlDocs(targets, options = {}) {
             scan._resume = { visited, seeds: [...seeds], restored: scan.pages.length };
             for (const rec of reused) journal.append(scan.scanId, { page: rec.page, links: rec.links || [] });
           }
-          scan.stats.incremental = { reused: scan.pages.length, viaLastmod: reuse.length, via304: confirmed304.length, baseline: records.length, sitemapLastmods: currentLastmod.size };
+          scan.stats.incremental = { reused: scan.pages.length, viaLastmod: reuse.length, via304: confirmed304.length, unchangedByHash: 0, recrawled: 0, baseline: records.length, sitemapLastmods: currentLastmod.size };
           emit({ type: 'incremental', phase: 'plan', url: scan.url, reused: scan.pages.length, viaLastmod: reuse.length, via304: confirmed304.length, baseline: records.length });
         }
         if (resume && scan._resume && scan._resume.restored) {
@@ -727,6 +745,13 @@ export function crawlDocs(targets, options = {}) {
         }
         scan.stats.pages = scan.pages.length;
         scan.stats.durationMs = Date.now() - scan._startedAt;
+        // #6 — truthful incremental report: reused (skipped) vs recrawled, and how many
+        // of the recrawled turned out unchanged anyway (hash-net) — measured, not guessed.
+        if (opts.incremental && !resume && scan.stats.incremental) {
+          const inc = scan.stats.incremental;
+          inc.recrawled = scan.pages.length - inc.reused;
+          emit({ type: 'incremental', phase: 'done', url: scan.url, reused: inc.reused, viaLastmod: inc.viaLastmod, via304: inc.via304, recrawled: inc.recrawled, unchangedByHash: inc.unchangedByHash });
+        }
       }
     } catch (err) {
       emit({ type: 'error', message: 'crawl failed: ' + (err && err.message ? err.message : String(err)) });

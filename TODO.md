@@ -99,7 +99,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 3 | Trigger "documentazione" universale (multilingua) | consumi + precisione | Basso-Medio | ✅ fatto (2026-07-01) |
 | 4 | Prompt caching del prefisso istruzioni (API remote) | consumi | Basso | ✅ fatto (2026-07-02) |
 | 5 | Riuso contesto browser per worker (cache asset) | consumi (tempo+banda) | Basso-Medio | ✅ fatto (2026-07-01, verificato con browser reale) |
-| 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | 🟡 Fette 1+2 (lastmod-skip + HTTP 304) fatte 2026-07-06; hash-net da fare |
+| 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | ✅ fatto (2026-07-06) — lastmod-skip + HTTP 304 + hash-net, `--incremental` |
 | 7 | Dedup near-duplicate con SimHash | precisione output + consumi | Medio | ✅ fatto (2026-07-01 opt-in; 2026-07-02 tier mirror/variante DEFAULT-ON + stop espansione dai duplicati) |
 | 8 | Estrazione stile Trafilatura (pruning per densità link) | precisione | Medio | ✅ fatto (2026-07-01) |
 | 9 | Rinforzo reveal: accessibility-tree / Set-of-Marks | precisione (casi difficili) | Alto | 🟡 misura veritiera fatta (`b08d59a`); a11y/vision de-prioritizzato (residuo reale ~5%) |
@@ -414,8 +414,8 @@ crawl in sola lettura è accettabile; valutare reset se un sito si comporta male
 ---
 
 ## #6 — Crawl incrementale (ETag / Last-Modified / sitemap lastmod)
-**Effetto:** consumi (enorme per refdna) · **Sforzo:** Medio · **Stato:** 🟡 Fette 1+2
-(lastmod-skip + HTTP 304) FATTE (2026-07-06); hash-net = ancora da fare
+**Effetto:** consumi (enorme per refdna) · **Sforzo:** Medio · **Stato:** ✅ FATTO
+(2026-07-06) — Fette 1 (lastmod-skip) + 2 (HTTP 304) + 3 (hash-net), opt-in `--incremental`
 
 > **Fetta 1 — lastmod-skip (FATTA, opt-in, conservativa).** `incremental: true` (CLI
 > `--incremental`) riusa le pagine il cui `<lastmod>` in sitemap è invariato dall'ultima
@@ -447,10 +447,19 @@ crawl in sola lettura è accettabile; valutare reset se un sito si comporta male
 > con 1 ETag cambiato ri-crawla solo quella) + unit `isStaticSafe`/`planConditional`/
 > `conditionalGet`. **253 test verdi.**
 >
-> **Cosa resta (Fetta 3).** **hash-net**: confronto sha1 dopo render come rete quando il
-> server non ha né lastmod né validator (conferma "invariata", non risparmia il render →
-> valore basso, per questo ultima). Nota costo Fetta 2: una pagina cambiata paga un
-> conditional GET (200) IN PIÙ del re-crawl; il guadagno è tutto sulle invariate.
+> **Fetta 3 — hash-net (FATTA).** Per le pagine che nessun segnale ha potuto saltare
+> (né lastmod né validator), dopo il render si confronta il content-hash (lo stesso sha1
+> normalizzato del dedup) con quello della baseline: se combacia, la pagina era invariata.
+> NON risparmia il render — riporta solo la VERITÀ (misurata, non indovinata): evento
+> `incremental` `phase:'done'` con `reused` / `recrawled` / `unchangedByHash`. Il
+> `contentHash` si stampa in `meta` al crawl incrementale. File: `src/index.mjs` (stamp +
+> confronto in addPage + report per-scan). Test: `test/incremental-hash.test.mjs` (sito
+> senza sitemap né ETag: 2ª run ri-crawla 3 ma hash-net=3 invariate; 3ª con 1 pagina
+> editata → 2 invariate, 1 cambiata catturata). **256 test verdi.**
+>
+> **Nota costo (onestà).** Fetta 2: una pagina cambiata paga un conditional GET (200) IN
+> PIÙ del re-crawl; il guadagno è tutto sulle invariate. Fetta 3 non risparmia nulla, è
+> solo misura. I due grandi risparmi restano lastmod (docs) e 304 (siti con ETag).
 
 **Problema oggi.** Ogni crawl riparte da zero. refdna dovrà tenere i doc **freschi** nel
 tempo: ri-renderizzare migliaia di pagine immutate è spreco puro.

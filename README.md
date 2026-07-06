@@ -395,12 +395,16 @@ blank/missing validator, a URL absent from the sitemap, a dynamic multi-state pa
 re-crawls — so a real change is never skipped. Unchanged pages come out
 **byte-identical**.
 
+A page that no signal can clear is re-crawled — and a **content-hash net** then
+reports the truth: of the pages that had to be re-crawled, how many were unchanged
+anyway (hash matches the baseline) versus genuinely changed. It can't save the render,
+only make the run's change report **measured, not guessed**.
+
 - The first `--incremental` run is a normal full crawl that **establishes the
-  baseline** (it stamps each page's `lastmod`/`ETag`/`Last-Modified` and keeps its
-  journal). Subsequent `--incremental` runs of the same target reuse from it.
+  baseline** (it stamps each page's `lastmod`/`ETag`/`Last-Modified`/content hash and
+  keeps its journal). Subsequent `--incremental` runs of the same target reuse from it.
 - Implies saving. A site with neither a `<lastmod>` sitemap nor validators simply
-  crawls in full (no gain, no risk). A content-hash confirmation net is planned next
-  (see `TODO.md` #6).
+  crawls in full (no gain, no risk) — the hash net still tells you what actually moved.
 
 ## Reshape (Phase 2)
 
