@@ -94,12 +94,12 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 
 | # | Titolo | Effetto | Sforzo | Stato |
 |---|--------|---------|--------|-------|
-| 1 | Link relevance ranking dalla task (information foraging) | consumi + precisione | Medio | ✅ fatto (2026-07-01, da verificare dal vivo) |
-| 2 | Output JSON vincolato (constrained decoding) | consumi + precisione | Basso | ✅ fatto (2026-07-01, da verificare dal vivo) |
+| 1 | Link relevance ranking dalla task (information foraging) | consumi + precisione | Medio | ✅ fatto (2026-07-01; **live-confermato 2026-07-06**: task precision 100%) |
+| 2 | Output JSON vincolato (constrained decoding) | consumi + precisione | Basso | ✅ fatto (2026-07-01; **live-confermato 2026-07-06**: 46 chiamate AI, 0 parse falliti) |
 | 3 | Trigger "documentazione" universale (multilingua) | consumi + precisione | Basso-Medio | ✅ fatto (2026-07-01) |
 | 4 | Prompt caching del prefisso istruzioni (API remote) | consumi | Basso | ✅ fatto (2026-07-02) |
 | 5 | Riuso contesto browser per worker (cache asset) | consumi (tempo+banda) | Basso-Medio | ✅ fatto (2026-07-01, verificato con browser reale) |
-| 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | ✅ fatto (2026-07-06) — lastmod-skip + HTTP 304 + hash-net, `--incremental` |
+| 6 | Crawl incrementale (ETag / Last-Modified / lastmod) | consumi (enorme per refdna) | Medio | ✅ fatto (2026-07-06) — lastmod-skip + HTTP 304 + hash-net, `--incremental`; **live-confermato 2026-07-06** (lastmod 6/6 riusate 0 re-render; 304 giustamente rifiutato su SPA; hash-net attivo) |
 | 7 | Dedup near-duplicate con SimHash | precisione output + consumi | Medio | ✅ fatto (2026-07-01 opt-in; 2026-07-02 tier mirror/variante DEFAULT-ON + stop espansione dai duplicati) |
 | 8 | Estrazione stile Trafilatura (pruning per densità link) | precisione | Medio | ✅ fatto (2026-07-01) |
 | 9 | Rinforzo reveal: accessibility-tree / Set-of-Marks | precisione (casi difficili) | Alto | 🟡 Fase 1 fatta (2026-07-06: a11y-role + gate label rilassato su residuo alto); Fase 2 (Set-of-Marks/vision) deferita (residuo reale ~5%) |
@@ -110,7 +110,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 |---|--------|---------|--------|-------|
 | 10 | Output per-documento identificabile + metadata (opzione) | fruibilità | Medio | ✅ fatto (2026-07-01) |
 | 11 | Reshape (Fase 2): fedeltà verificata | rispetto-task | Medio | ✅ fatto (2026-07-02) |
-| 12 | Harness di misurazione (completezza / rispetto-task / token) | trasversale — abilita tutto | Medio | ✅ fatto (2026-07-01, da verificare dal vivo) |
+| 12 | Harness di misurazione (completezza / rispetto-task / token) | trasversale — abilita tutto | Medio | ✅ fatto (2026-07-01; **live-confermato 2026-07-06**: report completo su firebase, recall/precision/F1 100%) |
 | 24 | Fedeltà di layout dell'.md (varianti in posizione, link esterni, indentazione) | precisione output — leggibilità | Medio | ✅ fatto (2026-07-04) |
 | 25 | App incorporate: viste raggiunte (nav-in-main), budget protetto (futility guard), liste/tabelle leggibili | precisione reveal + leggibilità output | Medio | ✅ fatto (2026-07-04) |
 | 26 | Recupero heading per peso visivo (scheletro dell'.md, deterministico) | precisione output — struttura, abilita meglio il reshape | Medio | ✅ fatto (2026-07-04, commit d4cf445 + regressione ce1d218) |
@@ -126,7 +126,7 @@ la modifica e confrontare numero di pagine tenute, byte totali, e i blocchi rive
 | 15 | Render-wait: response-quiet al posto di `networkidle` | tempo (−secondi fissi per pagina) | Basso-Medio | ✅ fatto (2026-07-02, da verificare dal vivo) |
 | 16 | Budget/ranking per le route minate dai JS | consumi (token gate `links`) | Basso | ✅ fatto (2026-07-02, da misurare dal vivo) |
 | 17 | CI GitHub Actions (suite offline a ogni push) | qualità continua | Basso | ✅ fatto (2026-07-02) |
-| 18 | Packaging npm (playwright peer-optional, metadata repo) | fruibilità libreria | Basso | ✅ fatto (2026-07-06) — deps `optional` (scelta b) + escape-hatch `--omit=optional`, dry-run pulito |
+| 18 | Packaging npm (playwright peer-optional, metadata repo) | fruibilità libreria | Basso | ✅ fatto (2026-07-06) — deps `optional` (scelta b) + escape-hatch `--omit=optional`, dry-run pulito; **live-confermato 2026-07-06** (`npm pack --dry-run`: 37 file, solo src/bin/tipi/README/LICENSE) |
 
 **Gruppo D — Architettura esplicita & no-AI** (sessione 2026-07-02; ogni item deve
 rispettare: miglioramento netto qualità/costo/velocità a precisione invariata · usabile
@@ -172,6 +172,43 @@ come libreria · sinergia con le componenti esistenti · entrambe le visioni AI/
 3. **#22 tier embeddings** — il boost semantico, dopo che la base è pulita.
 4. Poi si torna all'ordine precedente per gli item aperti: #14 politeness → #6
    incrementale → #18 packaging → #9 accessibility-tree.
+
+---
+
+## Verifica dal vivo — 2026-07-06 (smoke test) ✅
+
+Chiuso lo smoke test dal vivo dell'ordine consigliato (item 0): ambiente reale
+(Node 22 · Playwright/Chromium · Ollama `qwen3-coder:30b` + embed `bge-m3`). Tutti i
+crawl in isolamento (cache dedicata in scratchpad, cache utente non toccata).
+Baseline offline: **258/258 test verdi**.
+
+- **#18 packaging** — `npm pack --dry-run`: 37 file, **solo** `src/`, `bin/`,
+  `index.d.ts`, `README`, `LICENSE`, `package.json` (nessun `ui/`, `test/`, `scripts/`,
+  `eval/`); `playwright` in `optionalDependencies`. Tarball 184 kB.
+- **#1 / #2 / #8 / #12 (crawl docs targeted, Ollama)** — harness su
+  `firebase.google.com/docs/web/setup` (maxPages 1, maxActions 25):
+  - (a) reveal completeness **100%** (`npm install firebase` dietro tab npm/CDN rivelato);
+  - (b) task recall **100%** (`initializeApp`/`firebaseConfig`), task precision **100%**
+    (`CocoaPods`/`build.gradle` fuori-tema correttamente ASSENTI), **F1 100%** → #1 conferma;
+  - (c) token metering per-kind funzionante: 22.678 token, **46 chiamate AI, 0 parse
+    JSON falliti** e run completata pulita → #2/#12 confermati;
+  - il residuo ~717 parole è un caso `hitCap` (budget maxActions 25), non un buco di
+    rilevamento → misura veritiera del #9/#21 (b08d59a) confermata dal vivo.
+- **#6 incrementale (no-AI, due run per target)**:
+  - **Fetta 1 lastmod-skip** — vitepress.dev (sitemap 272 lastmod): 2ª run **riusa 6/6
+    via lastmod, 0 re-render** (`extractedEvents=0`). Il differenziatore confermato.
+  - **Fetta 2 HTTP 304** — vuejs.org (sitemap SENZA lastmod, con ETag): `via304:0` =
+    il motore **rifiuta giustamente** di fidarsi di un 304 sulla shell di una SPA
+    (guardia trappola-SPA, regola #1). Comportamento voluto, non un difetto (il 304 su
+    sito statico vero resta coperto da `test/incremental-304.test.mjs`).
+  - **Fetta 3 hash-net** — vuejs.org: attiva e funzionante, `unchangedByHash:1/5` (le
+    altre 4 differiscono per varianza di render SPA; la hash-net non salva il render,
+    riporta solo la verità misurata).
+
+**Esito:** nessuna regressione, nessuna perdita di contenuto; tutti i "⏳ da verificare
+dal vivo" mirati chiusi. Restano solo verifiche dal vivo di rilievo minore (#15
+render-wait, #16 byKind.links sotto un provider a pagamento) e la Fase 2 del #9
+(Set-of-Marks/vision) deliberatamente deferita.
 
 ---
 
@@ -1987,8 +2024,14 @@ commenti in `reveal.mjs`/`crawl-page.mjs`, `test/extract.test.mjs`.
 
 ---
 
-_Ultimo aggiornamento: 2026-07-04 — #29 reveal "compatto ma strutturato" + record
-fedele per-stato FATTO: il `BlockAccumulator` non fonde più gli stati in un elenco
+_Ultimo aggiornamento: 2026-07-06 — SMOKE TEST DAL VIVO chiuso (vedi la sezione
+"Verifica dal vivo — 2026-07-06"): #18 packaging (tarball pulito, 37 file), #1/#2/#8/#12
+(crawl docs Ollama su firebase: recall/precision/F1 100%, 46 chiamate AI e 0 parse
+falliti, report token per-kind) e #6 incrementale (lastmod-skip 6/6 riusate 0 re-render;
+304 giustamente rifiutato su SPA; hash-net attivo) tutti live-confermati; 258/258 test
+offline verdi. Il backlog #1–#29 è chiuso; resta solo la Fase 2 del #9 (Set-of-Marks/
+vision), deliberatamente deferita. In precedenza, 2026-07-04 — #29 reveal "compatto ma
+strutturato" + record fedele per-stato FATTO: il `BlockAccumulator` non fonde più gli stati in un elenco
 piatto (che orfanava `d`/`r` e buttava lo snapshot). Ora conserva ogni stato,
 `toMarkdown` rende la cornice condivisa una volta + i frammenti che cambiano
 raggruppati ed etichettati per stato (accretive/load-more senza duplicati), e
