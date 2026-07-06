@@ -215,10 +215,15 @@ footer{border-top:1px solid var(--b1);margin-top:24px}
         and “load more” buttons that static crawlers never touch — then hands you clean,
         word-for-word Markdown. Turn on AI and it follows your goal and keeps only what matters.</p>
       <div class="cta">
-        <span class="term"><span><span class="d">$</span> npx crawldna https://site.dev --no-ai</span>
+        <span class="term"><span><span class="d">$</span> npx crawldna https://site.dev --no-ai --max-pages 20</span>
           <button id="copy" title="Copy">copy</button></span>
         <a class="btn btn-primary" href="#how">See how it works →</a>
       </div>
+      <p class="muted" style="margin-top:14px;font-size:13.5px;line-height:1.65">
+        Needs <b>Node&nbsp;≥&nbsp;20</b>. The first reveal run installs Chromium once —
+        <code>npx playwright install chromium</code>. Add
+        <code>--task "…" --model qwen3-coder:30b</code> to turn on AI: it follows your goal and keeps only what matters.
+      </p>
     </div>
     <!-- reveal illustration -->
     <div class="reveal-art" aria-hidden="true">
@@ -460,7 +465,7 @@ footer{border-top:1px solid var(--b1);margin-top:24px}
       <h2>Point it at a site. Get clean Markdown.</h2>
       <p>Open-source, CLI- and library-first, with an optional local Web UI. Start with zero tokens.</p>
       <div class="cta">
-        <span class="term"><span><span class="d">$</span> npx crawldna https://site.dev --no-ai</span>
+        <span class="term"><span><span class="d">$</span> npx crawldna https://site.dev --no-ai --max-pages 20</span>
           <button id="copy2" title="Copy">copy</button></span>
         <a class="btn btn-primary" href="https://github.com/BogdanVasaiu/crawlDNA" target="_blank" rel="noopener">View on GitHub →</a>
       </div>
@@ -506,7 +511,7 @@ makeDna('dna','#20e3a0'); makeDna('dna-foot','#20e3a0');
 setTimeout(()=>typewriter('brand'),350);
 setTimeout(()=>typewriter('brand-foot'),350);
 function bindCopy(id){const el=document.getElementById(id);if(!el)return;el.addEventListener('click',function(){
-  navigator.clipboard.writeText('npx crawldna https://site.dev --no-ai').then(()=>{const o=this.textContent;this.textContent='copied ✓';setTimeout(()=>this.textContent=o,1400)})})}
+  navigator.clipboard.writeText('npx crawldna https://site.dev --no-ai --max-pages 20').then(()=>{const o=this.textContent;this.textContent='copied ✓';setTimeout(()=>this.textContent=o,1400)})})}
 bindCopy('copy'); bindCopy('copy2');
 </script>
 </body>
