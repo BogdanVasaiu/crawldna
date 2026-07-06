@@ -346,6 +346,27 @@ test('compact-but-structured: a partial change keeps each state WHOLE, frame sha
   assert.ok(md.slice(s3).includes('RRR') && md.slice(s3).includes('DDD'), 'S3 shows its full context (r·d) together');
 });
 
+test('a degenerate/partial capture does NOT poison the frame (majority vote, not strict intersection)', () => {
+  // The live Vuetify regression: among N reveal states of one component page, a single
+  // transient capture held almost nothing (a 3-line mid-transition render). A strict
+  // "in EVERY variant" frame let that one deviant state evict the whole shared body, so
+  // every other state re-emitted the full page — ~10 near-identical copies on ~10% of
+  // pages. A MAJORITY vote frames the body once; the tiny capture only adds its own delta.
+  const body = (v) => `# Title\n\nShared A.\n\nShared B.\n\n${v}\n\nShared C.`;
+  const acc = new BlockAccumulator();
+  acc.add(body('var 0')); // baseline (full)
+  for (let i = 1; i <= 6; i++) acc.add(body(`var ${i}`), { label: `S${i}`, provenance: `control:S${i}`, order: 100 + i });
+  acc.add('# Title\n\nLoading…', { label: 'blip', provenance: 'control:blip', order: 999 }); // the degenerate capture
+  const md = acc.toMarkdown();
+  const count = (s) => md.split(s).length - 1;
+  assert.equal(count('Shared A.'), 1, 'shared body framed ONCE despite the deviant capture (was repeated per state)');
+  assert.equal(count('Shared B.'), 1, 'shared body framed once');
+  assert.equal(count('Shared C.'), 1, 'shared body framed once');
+  assert.equal(count('# Title'), 1, 'the page title is not repeated per state');
+  for (let i = 0; i <= 6; i++) assert.ok(md.includes(`var ${i}`), `distinct variant "var ${i}" kept — no content lost`);
+  assert.ok(md.includes('Loading…'), 'even the degenerate capture keeps its own content');
+});
+
 test('states() is the FAITHFUL per-state record — every snapshot whole and verbatim', () => {
   const acc = new BlockAccumulator();
   acc.add('AAA\n\nBBB\n\nCCC');
@@ -438,6 +459,28 @@ test('single-column stack tables render as bullets, not empty | | rows (inline-A
   assert.ok(!/^\| \|$/m.test(markdown), 'no empty single-column | | rows');
   assert.match(markdown, /- bottom/, 'non-empty cells become bullets');
   assert.match(markdown, /- The default Vue slot\./, 'all data is kept, empty cells dropped');
+});
+
+test('API prop tables stay rectangular: fenced cells → inline code, colspan descriptions pad to width', () => {
+  // The dominant Vuetify table shape: a proper name|type|default table whose values
+  // are <pre><code> (→ a fenced block the cell flattener collapses to ``` … ``` mid-cell)
+  // and whose per-prop DESCRIPTION is a <td colspan=3> second row (→ ONE cell in a
+  // 3-column table, shattering the layout — ~8k of them in a live run).
+  const html = `<main><p>Body text long enough to be chosen as the main content region of this page here for sure.</p>
+    <table>
+    <thead><tr><th>name</th><th>type</th><th>default</th></tr></thead>
+    <tbody>
+    <tr><td>animation</td><td><pre><code>boolean | { d: number }</code></pre></td><td><pre><code>false</code></pre></td></tr>
+    <tr><td colspan="3">Enables smooth transitions when values change.</td></tr>
+    </tbody></table></main>`;
+  const { markdown } = extractMarkdown(html, { baseUrl: 'https://x.com' });
+  const rows = markdown.split('\n').filter((l) => /^\|/.test(l));
+  const cols = (l) => l.replace(/\\\|/g, '#').trim().replace(/^\|/, '').replace(/\|$/, '').split('|').length;
+  assert.ok(!/```/.test(markdown), 'no triple-backtick fence leaks into a cell');
+  assert.ok(markdown.includes('`boolean \\| { d: number }`'), 'a fenced type cell becomes inline code, its pipe escaped');
+  assert.ok(markdown.includes('`false`'), 'a fenced default cell becomes inline code');
+  assert.ok(rows.every((r) => cols(r) === 3), `every row is the header width (3) — got:\n${rows.join('\n')}`);
+  assert.ok(markdown.includes('| Enables smooth transitions when values change. |  |  |'), 'a colspan description pads to full width, never a 1-cell shatter');
 });
 
 test('adjacent links get a separating space (a row of buttons stays readable)', () => {

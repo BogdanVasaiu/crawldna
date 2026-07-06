@@ -642,10 +642,68 @@ function renderMarkdown(content) {
     // clearly-navigational lead-ins so real "next steps" content is not cut).
     .replace(/\n#{1,6}[ \t]*(?:ready for more|continue your learning|keep reading)\b[\s\S]*$/i, '');
   markdown = cleanupLines(markdown);
+  markdown = repairTables(markdown);
 
   // Final safety net: remove any inline-SVG/data-URI image noise that leaked as text
   // (broken data-URI attributes spill their SVG body into the document).
   return stripSvgNoise(markdown);
+}
+
+/**
+ * Make every GFM table RECTANGULAR so none renders ragged. Turndown + the gfm
+ * plugin emit table rows verbatim from the HTML, which on real docs sites means:
+ *   - a prop's DESCRIPTION arrives as a `<td colspan>` second row → ONE cell in a
+ *     3-column table (`| Enables … |`), shattering the column layout (~8k such rows
+ *     in a live Vuetify run);
+ *   - a value `<pre>`/`<code>` inside a cell becomes a FENCED block that the cell
+ *     flattener collapses to ``` ``` 16px ``` ``` — triple backticks mid-cell;
+ *   - stray fully-empty `| |` rows and colspan headers leave rows of differing width.
+ * For each table: split every row on UNESCAPED pipes, turn any fenced cell into
+ * inline `` `code` ``, pad short rows AND the header out to the widest row, drop
+ * empty DATA rows (never the header), and regenerate the separator. Content-safe —
+ * no cell text is dropped (only re-fitted), a fenced cell only loses its fence, and
+ * non-table lines pass through untouched (fenced code blocks are skipped so an ASCII
+ * table inside a ``` sample is never rewritten).
+ */
+function repairTables(markdown) {
+  const lines = String(markdown || '').split('\n');
+  const out = [];
+  const isTableLine = (l) => /^\s*\|/.test(l);
+  const isFence = (l) => /^\s*(```+|~~~+)/.test(l);
+  const isSep = (l) => /-{2,}/.test(l) && /^[\s|:-]+$/.test(l.trim());
+  const splitCells = (l) =>
+    l.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+  // A cell whose value was a fenced block (`<pre>`/`<code>` in a `<td>`) → inline code.
+  const inlineFence = (c) => c.replace(/`{3,}[a-z0-9]*\s*([^`]*?)\s*`{3,}/gi, (_, code) => '`' + code.trim() + '`').trim();
+
+  let inFence = false;
+  let fence = '';
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fm = line.match(/^\s*(```+|~~~+)/);
+    if (fm) {
+      if (!inFence) { inFence = true; fence = fm[1]; } else if (line.trim().startsWith(fence)) inFence = false;
+      out.push(line); i++; continue;
+    }
+    if (inFence || !isTableLine(line)) { out.push(line); i++; continue; }
+    // Gather the contiguous run of table lines.
+    let j = i;
+    while (j < lines.length && isTableLine(lines[j]) && !isFence(lines[j])) j++;
+    const run = lines.slice(i, j);
+    const sepIdx = run.findIndex(isSep);
+    if (sepIdx === -1) { for (const r of run) out.push(r); i = j; continue; } // no separator → not a table
+    const rows = run.map((r, idx) => ({ sep: idx === sepIdx, header: idx < sepIdx, cells: splitCells(r).map(inlineFence) }));
+    const ncol = Math.max(1, ...rows.filter((r) => !r.sep).map((r) => r.cells.length));
+    for (const r of rows) {
+      if (r.sep) { out.push('| ' + Array(ncol).fill('---').join(' | ') + ' |'); continue; }
+      if (!r.header && r.cells.every((c) => c === '')) continue; // drop empty data rows, keep the header
+      const cells = r.cells.concat(Array(Math.max(0, ncol - r.cells.length)).fill(''));
+      out.push('| ' + cells.join(' | ') + ' |');
+    }
+    i = j;
+  }
+  return out.join('\n');
 }
 
 /**
@@ -1023,15 +1081,30 @@ export class BlockAccumulator {
       return base.keys.some((k) => !set.has(k));
     });
 
-    // FRAME = blocks in the baseline AND in EVERY variant state (the shared
-    // skeleton). Accretive-only additions are NOT frame — they become their own
-    // unlabelled groups, keeping their document position without repeating.
-    const frame = new Set(base.keys);
+    // FRAME = the shared skeleton: baseline blocks present in MORE THAN HALF of the
+    // VARIANT states. A strict intersection ("in EVERY variant") made the frame hostage
+    // to a single degenerate capture — one transient/partial render (a state caught
+    // mid-transition holding almost no blocks) shares none of the body, so it evicted
+    // the ENTIRE skeleton and every other state then re-emitted the whole page (a live
+    // Vuetify run had one 3-line capture among nine turn a component page into 10
+    // near-identical full copies; ~10% of pages carried this bloat). A MAJORITY vote
+    // keeps a block framed when the bulk of states agree it is shared, so a few
+    // deviant/partial captures no longer poison it — while a block in only HALF the
+    // variants (a true mutually-exclusive pair) still falls OUT and stays WITH each
+    // state (the A,b,c→A,b,d→r,b,d case: AAA is in 1 of 2 variants = 50%, not a
+    // majority, so it repeats). Accretive-only states never vote (they hid nothing),
+    // keeping their own unlabelled group. No content is lost: a block wrongly excluded
+    // is merely repeated, a framed block is emitted once, and every full snapshot still
+    // lives verbatim in states().
+    const baseKeys = new Set(base.keys);
+    const variantHits = new Map(); // baseline key -> # of variant states holding it
+    let variantCount = 0;
     states.forEach((s, i) => {
       if (!isVariant[i]) return;
-      const set = new Set(s.keys);
-      for (const k of [...frame]) if (!set.has(k)) frame.delete(k);
+      variantCount++;
+      for (const k of s.keys) if (baseKeys.has(k)) variantHits.set(k, (variantHits.get(k) || 0) + 1);
     });
+    const frame = new Set(base.keys.filter((k) => variantCount === 0 || (variantHits.get(k) || 0) > variantCount / 2));
 
     // A state's delta group: for a VARIANT, ALL its non-frame blocks in state order
     // (repetition intended — the changing context that gives `d` its meaning); for
