@@ -380,16 +380,27 @@ pages. Pass `incremental: true` (CLI `--incremental`) and a re-crawl of the same
 target **reuses** every page whose sitemap `<lastmod>` is unchanged since the last
 incremental run — skipping render + reveal for it — and re-crawls only what changed.
 
-- **Conservative by construction**: a page is reused **only** when its stored and
-  current `<lastmod>` are both present and equal. Any uncertainty (no sitemap, a blank
-  or missing `lastmod`, a URL not in the current sitemap) re-crawls — so a real change
-  is never skipped. Unchanged pages come out **byte-identical**.
+Two freshness signals decide "unchanged", cheapest first:
+
+- **Sitemap `<lastmod>`** — reuse a page when its stored and current `<lastmod>` are
+  both present and equal (no fetch at all).
+- **HTTP `304`** — for the still-uncertain pages that carry an `ETag`/`Last-Modified`,
+  a conditional GET (`If-None-Match`/`If-Modified-Since`) asks the server; a `304` is
+  the server confirming it's byte-for-byte unchanged. This is applied **only to
+  static-safe pages** (captured in a single state with nothing left hidden) — a page
+  whose content is click/JS-driven is never trusted to a shell `304`.
+
+Everything else is **conservative by construction**: any uncertainty (no signal, a
+blank/missing validator, a URL absent from the sitemap, a dynamic multi-state page)
+re-crawls — so a real change is never skipped. Unchanged pages come out
+**byte-identical**.
+
 - The first `--incremental` run is a normal full crawl that **establishes the
-  baseline** (it stamps each page's `lastmod` and keeps its journal). Subsequent
-  `--incremental` runs of the same target reuse from it.
-- Implies saving. Sites without a `<lastmod>` sitemap simply crawl in full (no gain,
-  no risk). This first slice uses sitemap `lastmod`; HTTP `ETag`/`304` and a
-  content-hash net are planned next (see `TODO.md` #6).
+  baseline** (it stamps each page's `lastmod`/`ETag`/`Last-Modified` and keeps its
+  journal). Subsequent `--incremental` runs of the same target reuse from it.
+- Implies saving. A site with neither a `<lastmod>` sitemap nor validators simply
+  crawls in full (no gain, no risk). A content-hash confirmation net is planned next
+  (see `TODO.md` #6).
 
 ## Reshape (Phase 2)
 

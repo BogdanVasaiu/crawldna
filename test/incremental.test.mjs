@@ -2,7 +2,7 @@
 // sitemap <lastmod> extraction, and target-set matching for baseline discovery.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planIncremental } from '../src/lib/incremental.mjs';
+import { planIncremental, isStaticSafe, planConditional } from '../src/lib/incremental.mjs';
 import { sitemapEntriesFromXml } from '../src/profiles/docs/sitemap.mjs';
 import { targetsMatch } from '../src/lib/runs.mjs';
 import { normalizeUrl } from '../src/lib/url.mjs';
@@ -86,4 +86,25 @@ test('targetsMatch: different sets and empties do not match', () => {
   assert.equal(targetsMatch([{ url: 'https://x.dev/a' }], [{ url: 'https://x.dev/b' }]), false);
   assert.equal(targetsMatch([{ url: 'https://x.dev/a' }], [{ url: 'https://x.dev/a' }, { url: 'https://x.dev/b' }]), false);
   assert.equal(targetsMatch([], []), false);
+});
+
+// --- 304 tier: only STATIC-SAFE pages may be shortcut on a shell 304 -----------
+test('isStaticSafe: single-state, zero-residual page is safe', () => {
+  assert.equal(isStaticSafe({ meta: { revealResidualChars: 0 } }), true);
+  assert.equal(isStaticSafe({ meta: {} }), true); // static-path page (no residual field)
+});
+
+test('isStaticSafe: multi-state or leftover-hidden page is NOT safe', () => {
+  assert.equal(isStaticSafe({ states: [{}, {}], meta: { revealResidualChars: 0 } }), false, 'multi-state → dynamic');
+  assert.equal(isStaticSafe({ meta: { revealResidualChars: 120 } }), false, 'text still hidden → dynamic');
+  assert.equal(isStaticSafe(null), false);
+});
+
+test('planConditional: eligible = static-safe AND has a validator; rest re-crawls', () => {
+  const eligibleRec = { page: { url: 'https://x.dev/a', meta: { revealResidualChars: 0, httpEtag: '"v1"' } } };
+  const noValidator = { page: { url: 'https://x.dev/b', meta: { revealResidualChars: 0 } } };
+  const dynamic = { page: { url: 'https://x.dev/c', states: [{}, {}], meta: { httpEtag: '"v1"' } } };
+  const { eligible, rest } = planConditional([eligibleRec, noValidator, dynamic]);
+  assert.deepEqual(eligible.map((r) => r.page.url), ['https://x.dev/a']);
+  assert.deepEqual(rest.map((r) => r.page.url).sort(), ['https://x.dev/b', 'https://x.dev/c']);
 });

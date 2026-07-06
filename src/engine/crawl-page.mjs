@@ -433,10 +433,22 @@ export async function crawlPageWithEngine(target, ctx) {
       // characters of text were STILL hidden in the main content when the
       // reveal loop ended (0 = measured drain). Travels into the manifest and
       // scan stats so completeness is a number, not a hope.
-      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown), revealResidualChars: revealed.hiddenResidualChars || 0 },
+      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown), revealResidualChars: revealed.hiddenResidualChars || 0, ...httpValidators(headers, ctx.options.incremental) },
     },
     links: follow,
   };
+}
+
+/** #6 — pull HTTP cache validators from a response's (lowercased) headers, only when
+ *  an incremental crawl will need them. Empty object otherwise, so meta is unchanged. */
+function httpValidators(headers, incremental) {
+  if (!incremental || !headers) return {};
+  const out = {};
+  const etag = headers['etag'];
+  const lm = headers['last-modified'];
+  if (etag) out.httpEtag = String(etag);
+  if (lm) out.httpLastModified = String(lm);
+  return out;
 }
 
 /** No-browser path: plain fetch + static extraction (degraded; emits no reveal). */
@@ -490,7 +502,7 @@ async function staticFallback(target, ctx) {
       task,
       title,
       markdown,
-      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown) },
+      meta: { strategy: 'agent', fetchedAt: now(), bytes: bytesOf(markdown), ...httpValidators(res.headers, ctx.options.incremental) },
     },
     links: [...links],
   };

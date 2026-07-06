@@ -37,6 +37,30 @@ export async function fetchText(url, { headers, timeout = 30000, accept } = {}) 
   }
 }
 
+/**
+ * #6 — a conditional GET for incremental re-crawl. Sends If-None-Match /
+ * If-Modified-Since built from a page's stored validators; a 304 is the SERVER
+ * itself confirming the resource is byte-for-byte unchanged. Returns the fresh
+ * validators too (so they can be re-stored) and never throws. With no validators
+ * to send there is nothing to ask, so it reports "changed" (notModified:false).
+ * @param {string} url
+ * @param {{etag?:string,lastModified?:string,timeout?:number}} v
+ * @returns {Promise<{status:number,notModified:boolean,etag:string,lastModified:string}>}
+ */
+export async function conditionalGet(url, { etag, lastModified, timeout = 15000 } = {}) {
+  if (!etag && !lastModified) return { status: 0, notModified: false, etag: '', lastModified: '' };
+  const headers = {};
+  if (etag) headers['if-none-match'] = etag;
+  if (lastModified) headers['if-modified-since'] = lastModified;
+  const res = await fetchText(url, { headers, timeout });
+  return {
+    status: res.status,
+    notModified: res.status === 304,
+    etag: (res.headers && res.headers['etag']) || '',
+    lastModified: (res.headers && res.headers['last-modified']) || '',
+  };
+}
+
 /** Rough "did this HTML arrive with real content?" heuristic. */
 export function looksRendered(html) {
   if (!html) return false;

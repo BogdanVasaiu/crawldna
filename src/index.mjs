@@ -14,12 +14,12 @@ import { crawlPageWithEngine } from './engine/crawl-page.mjs';
 import { assembleScan, assemblePerDocument, assembleStates } from './lib/layout.mjs';
 import { saveRun, scanIdFor, initRun, appendJournal, loadRunForResume, findBaselineRun, cacheRoot } from './lib/runs.mjs';
 import { sitemapLastmodMap } from './profiles/docs/sitemap.mjs';
-import { planIncremental } from './lib/incremental.mjs';
+import { planIncremental, planConditional, httpValidators } from './lib/incremental.mjs';
 import { retainBrowser, releaseBrowser, configureContextPool } from './lib/browser.mjs';
 import { normalizeUrl, inScope, pathOf, originOf, hostOf, siblingKey } from './lib/url.mjs';
 import { modeBehavior, MODES } from './lib/task.mjs';
 import { createHostGate, parseRobots, isAllowed } from './lib/robots.mjs';
-import { fetchText } from './lib/fetcher.mjs';
+import { fetchText, conditionalGet } from './lib/fetcher.mjs';
 import { resolveLlm, checkModel, abortPendingLlm, llmDisabled } from './lib/llm.mjs';
 import { simhash, hamming } from './lib/simhash.mjs';
 
@@ -245,6 +245,37 @@ function restoreRecords(scan, records, opts) {
     }
   }
   return { visited, seeds };
+}
+
+/**
+ * #6 — confirm which eligible baseline pages are still unchanged via an HTTP 304.
+ * Bounded-parallel conditional GETs (never renders); a 304 marks the record for
+ * reuse and refreshes its stored validators. Returns the confirmed-unchanged records.
+ */
+async function conditionalReuse(records, concurrency, shouldStop) {
+  const confirmed = [];
+  const limit = Math.max(1, Math.min(Number(concurrency) || 1, 16));
+  let i = 0;
+  async function worker() {
+    while (i < records.length) {
+      if (shouldStop && shouldStop()) return;
+      const rec = records[i++];
+      const { etag, lastModified } = httpValidators(rec.page);
+      let r;
+      try {
+        r = await conditionalGet(rec.page.url, { etag, lastModified });
+      } catch {
+        r = { notModified: false };
+      }
+      if (r.notModified) {
+        if (r.etag) rec.page.meta.httpEtag = r.etag;
+        if (r.lastModified) rec.page.meta.httpLastModified = r.lastModified;
+        confirmed.push(rec);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, records.length) }, worker));
+  return confirmed;
 }
 
 export function crawlDocs(targets, options = {}) {
@@ -663,14 +694,24 @@ export function crawlDocs(targets, options = {}) {
           }
           scan._lastmodMap = currentLastmod;
           const records = (baselineJournals && baselineJournals[scan.scanId]) || [];
-          const { reuse } = planIncremental(records, currentLastmod);
-          if (reuse.length) {
-            const { visited, seeds } = restoreRecords(scan, reuse, opts);
-            scan._resume = { visited, seeds: [...seeds], restored: scan.pages.length };
-            for (const rec of reuse) journal.append(scan.scanId, { page: rec.page, links: rec.links || [] });
+          const { reuse, recrawl } = planIncremental(records, currentLastmod);
+          // Second freshness signal: for the still-stale, STATIC-SAFE pages that carry
+          // an HTTP validator, ask the server with a conditional GET — a 304 means it
+          // is byte-for-byte unchanged, so reuse without rendering. Dynamic/multi-state
+          // pages are never trusted to a shell 304 (planConditional gates them out).
+          let confirmed304 = [];
+          if (recrawl.length && !stopped) {
+            const { eligible } = planConditional(recrawl);
+            if (eligible.length) confirmed304 = await conditionalReuse(eligible, opts.concurrency, () => stopped);
           }
-          scan.stats.incremental = { reused: scan.pages.length, baseline: records.length, sitemapLastmods: currentLastmod.size };
-          emit({ type: 'incremental', phase: 'plan', url: scan.url, reused: scan.pages.length, baseline: records.length });
+          const reused = reuse.concat(confirmed304);
+          if (reused.length) {
+            const { visited, seeds } = restoreRecords(scan, reused, opts);
+            scan._resume = { visited, seeds: [...seeds], restored: scan.pages.length };
+            for (const rec of reused) journal.append(scan.scanId, { page: rec.page, links: rec.links || [] });
+          }
+          scan.stats.incremental = { reused: scan.pages.length, viaLastmod: reuse.length, via304: confirmed304.length, baseline: records.length, sitemapLastmods: currentLastmod.size };
+          emit({ type: 'incremental', phase: 'plan', url: scan.url, reused: scan.pages.length, viaLastmod: reuse.length, via304: confirmed304.length, baseline: records.length });
         }
         if (resume && scan._resume && scan._resume.restored) {
           emit({ type: 'resume', url: scan.url, restored: scan._resume.restored });

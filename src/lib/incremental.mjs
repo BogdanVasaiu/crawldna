@@ -33,3 +33,41 @@ export function planIncremental(baselineRecords, currentLastmod) {
   }
   return { reuse, recrawl };
 }
+
+/**
+ * Is a page safe to shortcut on an HTTP 304? Only when its content came from a
+ * SINGLE rendered state with nothing left hidden — then the served document IS the
+ * page and a server 304 truly means unchanged. A multi-state reveal or leftover
+ * hidden text means content is click/JS-driven, where a shell 304 does NOT prove
+ * the content is unchanged — those are never trusted to a 304 (rule #1).
+ */
+export function isStaticSafe(page) {
+  if (!page) return false;
+  if (Array.isArray(page.states) && page.states.length > 1) return false;
+  return ((page.meta && page.meta.revealResidualChars) || 0) === 0;
+}
+
+/** A page's stored HTTP validators ('' when absent). */
+export function httpValidators(page) {
+  const m = (page && page.meta) || {};
+  return { etag: m.httpEtag || '', lastModified: m.httpLastModified || '' };
+}
+
+/**
+ * Of the pages lastmod could NOT clear as fresh, which are ELIGIBLE for a 304
+ * pre-check — static-safe AND carrying at least one stored validator. The rest are
+ * always re-crawled. Pure: the network 304 check itself happens in the caller.
+ * @param {Array<{page:object}>} recrawlRecords
+ * @returns {{ eligible: Array, rest: Array }}
+ */
+export function planConditional(recrawlRecords) {
+  const eligible = [];
+  const rest = [];
+  for (const rec of recrawlRecords || []) {
+    const page = rec && rec.page;
+    const v = httpValidators(page);
+    if (page && isStaticSafe(page) && (v.etag || v.lastModified)) eligible.push(rec);
+    else rest.push(rec);
+  }
+  return { eligible, rest };
+}
