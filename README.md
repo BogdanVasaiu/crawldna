@@ -36,7 +36,7 @@ It runs three ways from a single headless core:
 Standalone:
 
 ```sh
-git clone <repo> crawldna
+git clone https://github.com/BogdanVasaiu/crawldna
 cd crawldna
 npm install
 node bin/cli.mjs https://docusaurus.io/docs --task "Extract all documentation"
@@ -164,9 +164,11 @@ crawldna runs path            # print the cache directory
 ## Web UI
 
 > **Optional, and from the repo only.** The Web UI ships with the source repository,
-> not the npm package. Run it from a repo clone (`git clone … && npm install`):
+> not the npm package. Run it from a repo clone:
 >
 > ```sh
+> git clone https://github.com/BogdanVasaiu/crawldna
+> cd crawldna && npm install
 > npm run serve            # or: node bin/cli.mjs serve --port 4000
 > # open http://localhost:4000
 > ```
